@@ -3,13 +3,11 @@
 // передавая ему прямую ссылку на уже выбранный Lampa'ой поток.
 //
 // Как подключить:
-//   1. Ниже, в VR_PLAYER_URL, укажите адрес, где лежит ваш player2/index.html
-//      (он должен быть доступен из той же сети/устройства, что и Lampa —
-//      например через serve_https.py по адресу вида
-//      https://192.168.0.94:8790/player2/index.html).
-//   2. Выложите этот файл там, где Lampa сможет его скачать (свой сервер,
-//      GitHub raw и т.п.), и добавьте ссылку на него в Lampa:
-//      Настройки → Плагины → вставить URL этого файла.
+//   1. player2 и этот плагин выложены на GitHub Pages (публично, Lampa
+//      сможет достучаться откуда угодно, не только из локальной сети):
+//      https://zeprogress.github.io/player2-lampa/player2/index.html
+//   2. В Lampa: Настройки → Плагины → вставить ссылку на этот файл:
+//      https://zeprogress.github.io/player2-lampa/player2/lampa-plugin-vr.js
 //
 // Проверено по реальному исходнику Lampa (src/interaction/player.js,
 // src/templates/player/panel.js), но НЕ проверено внутри самой Lampa —
@@ -19,8 +17,7 @@
   'use strict';
   if (!window.Lampa) return;
 
-  // Адрес вашего player2 — замените на свой (см. пункт 1 выше).
-  var VR_PLAYER_URL = 'https://192.168.0.94:8790/player2/index.html';
+  var VR_PLAYER_URL = 'https://zeprogress.github.io/player2-lampa/player2/index.html';
 
   function addButton(streamUrl) {
     var root = Lampa.Player.render();
