@@ -15,7 +15,12 @@
   'use strict';
   if (!window.Lampa) return;
 
-  var VR_PLAYER_URL = 'https://zeprogress.github.io/player2-lampa/player2/index.html';
+  // Обычный http, не https: многие ссылки на потоки (m3u8 и т.п.) сами
+  // отдаются по http, а с https-страницы (GitHub Pages) браузер такие
+  // запросы блокирует как mixed content. Поэтому player2 здесь — локальный
+  // сервер в вашей сети (serve_https.py ... --http), а не GitHub Pages.
+  // Замените на свой адрес, если IP компьютера/порт другие.
+  var VR_PLAYER_URL = 'http://192.168.0.94:8790/player2/index.html';
 
   function debugNoty(text) {
     if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('[VR] ' + text);

@@ -2,6 +2,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Ambilight VR — второй подход без генерации</title>
+<!-- HLS.js: обычный <video> в Chrome/Firefox не проигрывает .m3u8 напрямую,
+     нужна прослойка через MediaSource (Safari — единственный, кто умеет
+     нативно, ему эта библиотека не понадобится и подключаться не будет). -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
 <style>
   html,body{margin:0;height:100%;background:#08080a;color:#e6e6ea;overflow:hidden;
     font:13px/1.55 -apple-system,system-ui,sans-serif}
@@ -440,6 +444,7 @@ function watchFrames(){
 // текстуру на старом (или самом первом placeholder-) кадре.
 video.addEventListener('seeked', () => { videoDirty = true; });
 
+let hls = null;
 function attachVideo(src, name){
   video.onloadedmetadata = () => {
     haveVideo = true;
@@ -451,7 +456,22 @@ function attachVideo(src, name){
     log(`фильм: ${name}  ${video.videoWidth}×${video.videoHeight}  ` +
         `(${videoAspect.toFixed(2)}:1)`);
   };
-  video.src = src;
+
+  if (hls) { hls.destroy(); hls = null; }
+
+  const isM3u8 = /\.m3u8(\?|$)/i.test(src.split('#')[0]);
+  const nativeHls = video.canPlayType('application/vnd.apple.mpegurl'); // Safari умеет сам
+
+  if (isM3u8 && !nativeHls && window.Hls && Hls.isSupported()) {
+    hls = new Hls();
+    hls.on(Hls.Events.ERROR, (_, data) => {
+      if (data.fatal) log(`HLS ошибка: ${data.type} — ${data.details}`);
+    });
+    hls.loadSource(src);
+    hls.attachMedia(video);
+  } else {
+    video.src = src;
+  }
 }
 document.getElementById('file').onchange = e => {
   const f = e.target.files[0]; if (!f) return;
