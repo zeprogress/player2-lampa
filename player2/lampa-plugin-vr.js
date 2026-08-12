@@ -41,15 +41,21 @@
   // одна). Раньше кнопка добавлялась только в первую попавшуюся — если она
   // относилась к скрытому в вашем режиме варианту, кнопки не было видно.
   // Теперь добавляем во ВСЕ такие группы сразу.
+  // Console нет на ТВ/телефоне — показываем отладку прямо в интерфейсе
+  // Lampa всплывающим уведомлением, один раз для каждого события.
+  function debugNoty(text) {
+    if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('[VR] ' + text);
+  }
+
   function addButton(streamUrl) {
     var root = Lampa.Player.render();
     if (!root || !root.length) {
-      console.warn('[vr-plugin] Lampa.Player.render() пуст — панель ещё не создана');
+      debugNoty('панель плеера ещё не создана');
       return;
     }
 
     var groups = root.find('.player-panel__right .player-panel__box-buttons');
-    console.log('[vr-plugin] найдено групп кнопок:', groups.length);
+    debugNoty('групп кнопок найдено: ' + groups.length);
     if (!groups.length) return;
 
     groups.each(function () {
@@ -62,7 +68,7 @@
   // 'ready' стреляет, когда плеер получил ссылку и готов играть —
   // data.url это уже разрешённый Lampa'ой прямой адрес потока.
   Lampa.Player.listener.follow('ready', function (data) {
-    console.log('[vr-plugin] событие ready', data);
+    debugNoty('событие ready, url есть: ' + !!(data && data.url));
     if (data && data.url) addButton(data.url);
   });
 })();
