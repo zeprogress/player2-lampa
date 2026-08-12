@@ -3,21 +3,23 @@
 // передавая ему прямую ссылку на уже выбранный Lampa'ой поток.
 //
 // Как подключить:
-//   1. player2 и этот плагин выложены на GitHub Pages (публично, Lampa
-//      сможет достучаться откуда угодно, не только из локальной сети):
-//      https://zeprogress.github.io/player2-lampa/player2/index.html
-//   2. В Lampa: Настройки → Плагины → вставить ссылку на этот файл:
-//      https://zeprogress.github.io/player2-lampa/player2/lampa-plugin-vr.js
+//   В Lampa: Настройки → Плагины → вставить ссылку на этот файл:
+//   https://zeprogress.github.io/player2-lampa/player2/lampa-plugin-vr.js
 //
-// Проверено по реальному исходнику Lampa (src/interaction/player.js,
-// src/templates/player/panel.js), но НЕ проверено внутри самой Lampa —
-// после подключения стоит открыть любой фильм и посмотреть, появилась ли
-// кнопка в панели плеера рядом с иконкой настроек.
+// Разметка панели плеера отличается между сборками Lampa (проверено на
+// практике), поэтому вместо жёстко заданного класса контейнера кнопка
+// цепляется как СОСЕДНИЙ элемент к любой уже существующей иконке из
+// стандартного набора (настройки/качество/полноэкранный/pip) — такая
+// иконка есть почти в любой версии плеера.
 (function () {
   'use strict';
   if (!window.Lampa) return;
 
   var VR_PLAYER_URL = 'https://zeprogress.github.io/player2-lampa/player2/index.html';
+
+  function debugNoty(text) {
+    if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('[VR] ' + text);
+  }
 
   function makeButton(streamUrl) {
     var btn = $(
@@ -34,17 +36,17 @@
     return btn;
   }
 
-  // Разметка панели плеера у Lampa содержит НЕСКОЛЬКО .player-panel__right —
-  // отдельно для ТВ-раскладки (.player-panel__tv-visible, там несколько
-  // .player-panel__box-buttons: качество / дорожки-субтитры / настройки-pip)
-  // и отдельно для мобильной/десктопной (.player-panel__mobile-visible, там
-  // одна). Раньше кнопка добавлялась только в первую попавшуюся — если она
-  // относилась к скрытому в вашем режиме варианту, кнопки не было видно.
-  // Теперь добавляем во ВСЕ такие группы сразу.
-  // Console нет на ТВ/телефоне — показываем отладку прямо в интерфейсе
-  // Lampa всплывающим уведомлением, один раз для каждого события.
-  function debugNoty(text) {
-    if (Lampa.Noty && Lampa.Noty.show) Lampa.Noty.show('[VR] ' + text);
+  // Ищем любую из типичных иконок панели по ЧАСТИЧНОМУ совпадению класса
+  // (не точное имя, а "содержит подстроку") — это переживает небольшие
+  // отличия в разметке между сборками/версиями Lampa.
+  var ANCHOR_NAMES = ['settings', 'fullscreen', 'quality', 'pip', 'volume', 'subs', 'tracks'];
+
+  function findAnchor(root) {
+    for (var i = 0; i < ANCHOR_NAMES.length; i++) {
+      var el = root.find('[class*="player-panel__' + ANCHOR_NAMES[i] + '"]').first();
+      if (el.length) return { el: el, name: ANCHOR_NAMES[i] };
+    }
+    return null;
   }
 
   function addButton(streamUrl) {
@@ -54,36 +56,21 @@
       return;
     }
 
-    var groups = root.find('.player-panel__right .player-panel__box-buttons');
-    debugNoty('групп кнопок найдено: ' + groups.length);
-    if (!groups.length) {
-      // Полный outerHTML забит длиннющими <svg><path d="..."> и не влезал в
-      // окно. Вместо этого — только имена классов элементов (без svg/path/
-      // rect), компактно, чтобы увидеть реальную структуру панели.
-      var lines = [];
-      root.find('.player-panel *').each(function () {
-        var tag = this.tagName ? this.tagName.toLowerCase() : '';
-        if (tag === 'svg' || tag === 'path' || tag === 'rect' || tag === 'use' || tag === 'g') return;
-        var cls = (this.getAttribute && this.getAttribute('class')) || '';
-        if (!cls.trim()) return;
-        var depth = $(this).parentsUntil('.player-panel').length;
-        lines.push(new Array(depth + 1).join('  ') + tag + '.' + cls.trim().replace(/\s+/g, '.'));
-      });
-      alert('[VR] классы внутри .player-panel:\n' + lines.join('\n'));
+    if (root.find('.player-panel__vr').length) return; // уже добавлена
+
+    var anchor = findAnchor(root);
+    if (!anchor) {
+      debugNoty('не нашёл ни одной знакомой иконки (settings/fullscreen/quality/pip) — разметка сильно отличается');
       return;
     }
 
-    groups.each(function () {
-      var group = $(this);
-      if (group.find('.player-panel__vr').length) return; // уже добавлена
-      group.prepend(makeButton(streamUrl));
-    });
+    debugNoty('цепляюсь рядом с "' + anchor.name + '"');
+    anchor.el.after(makeButton(streamUrl));
   }
 
   // 'ready' стреляет, когда плеер получил ссылку и готов играть —
   // data.url это уже разрешённый Lampa'ой прямой адрес потока.
   Lampa.Player.listener.follow('ready', function (data) {
-    debugNoty('событие ready, url есть: ' + !!(data && data.url));
     if (data && data.url) addButton(data.url);
   });
 })();
