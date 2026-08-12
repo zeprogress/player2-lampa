@@ -473,7 +473,20 @@ function attachVideo(src, name){
   // всегда используем его, это надёжнее заявленной браузером «поддержки».
 
   if (isM3u8 && window.Hls && Hls.isSupported()) {
-    hls = new Hls();
+    // Явно без credentials (куки/авторизация) на запросах сегментов — иначе
+    // при определённых ответах сервера итоговое видео может считаться
+    // «замаранным» (tainted) для чтения в canvas/WebGL: сама картинка и звук
+    // играют нормально, а вот выгрузка кадра в текстуру начинает тихо
+    // падать на каждом кадре — экран замирает на последнем кадре, звук идёт
+    // дальше. video.crossOrigin='anonymous' уже стоит, но у HLS.js свои
+    // отдельные XHR/fetch для сегментов, им нужно то же самое явно.
+    hls = new Hls({
+      xhrSetup: (xhr) => { xhr.withCredentials = false; },
+      fetchSetup: (context, initParams) => {
+        initParams.credentials = 'omit';
+        return new Request(context.url, initParams);
+      }
+    });
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (data.fatal) log(`HLS ошибка: ${data.type} — ${data.details}`);
     });
