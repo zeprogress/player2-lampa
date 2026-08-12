@@ -433,6 +433,7 @@ video.style.cssText = 'position:fixed;left:0;bottom:0;width:2px;height:2px;' +
 document.body.appendChild(video);
 let haveVideo = false, tainted = false, texUploads = 0;
 let videoDirty = true, texAllocated = false, vfcSupported = false;
+let texW = 0, texH = 0;
 
 function watchFrames(){
   if (!video.requestVideoFrameCallback) return;
@@ -458,6 +459,7 @@ function attachVideo(src, name){
     rebuildScreen();
     document.getElementById('play').disabled = false;
     texAllocated = false;
+    texW = 0; texH = 0;
     watchFrames();
     log(`фильм: ${name}  ${video.videoWidth}×${video.videoHeight}  ` +
         `(${videoAspect.toFixed(2)}:1)`);
@@ -648,10 +650,20 @@ function frame(now, xrFrame){
     gl.bindTexture(gl.TEXTURE_2D, texV);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     try {
-      if (!texAllocated){
+      // HLS-плеер на ходу переключает качество (например, 600p → FullHD),
+      // и разрешение video.videoWidth/Height меняется прямо посреди
+      // просмотра. Текстура была выделена под старый размер один раз и
+      // больше не трогалась — texSubImage2D с кадром большего размера тихо
+      // проваливался на уровне WebGL (без JS-исключения, поэтому в лог
+      // ничего не попадало): картинка замирала на последнем кадре, а звук
+      // с видео шли себе дальше. Перевыделяем текстуру при каждой смене
+      // разрешения, а не только один раз при самом первом кадре.
+      if (!texAllocated || texW !== video.videoWidth || texH !== video.videoHeight){
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, video.videoWidth, video.videoHeight,
                       0, gl.RGB, gl.UNSIGNED_BYTE, null);
         texAllocated = true;
+        texW = video.videoWidth;
+        texH = video.videoHeight;
       }
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGB, gl.UNSIGNED_BYTE, video);
       gl.generateMipmap(gl.TEXTURE_2D);   // нужно для режима «блюр» (textureLod)
