@@ -57,13 +57,19 @@
     var groups = root.find('.player-panel__right .player-panel__box-buttons');
     debugNoty('групп кнопок найдено: ' + groups.length);
     if (!groups.length) {
-      // Печатать в консоли некому — просто показываем реальную разметку
-      // панели через alert (не требует ни клавиатуры, ни консоли, только
-      // кнопку "ОК"), чтобы поправить селектор по факту.
-      var dump = root.find('.player-panel__line-two').prop('outerHTML')
-        || root.find('.player-panel').prop('outerHTML')
-        || '(панель не найдена вообще)';
-      alert('[VR] разметка панели:\n' + String(dump).slice(0, 1800));
+      // Полный outerHTML забит длиннющими <svg><path d="..."> и не влезал в
+      // окно. Вместо этого — только имена классов элементов (без svg/path/
+      // rect), компактно, чтобы увидеть реальную структуру панели.
+      var lines = [];
+      root.find('.player-panel *').each(function () {
+        var tag = this.tagName ? this.tagName.toLowerCase() : '';
+        if (tag === 'svg' || tag === 'path' || tag === 'rect' || tag === 'use' || tag === 'g') return;
+        var cls = (this.getAttribute && this.getAttribute('class')) || '';
+        if (!cls.trim()) return;
+        var depth = $(this).parentsUntil('.player-panel').length;
+        lines.push(new Array(depth + 1).join('  ') + tag + '.' + cls.trim().replace(/\s+/g, '.'));
+      });
+      alert('[VR] классы внутри .player-panel:\n' + lines.join('\n'));
       return;
     }
 
