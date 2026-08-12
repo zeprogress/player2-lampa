@@ -38,12 +38,17 @@
         '</svg>' +
       '</div>'
     );
+    // 'hover:enter' и 'click' у Lampa часто стреляют оба на одно и то же
+    // нажатие — без флага это открывало сразу два окна/вкладки.
+    var opened = false;
     btn.on('hover:enter click', function () {
+      if (opened) return;
+      opened = true;
       var finalUrl = /^http:\/\//i.test(streamUrl)
         ? HLS_PROXY + '?url=' + encodeURIComponent(streamUrl)
         : streamUrl;
       var url = VR_PLAYER_URL + '?video=' + encodeURIComponent(finalUrl);
-      window.open(url, '_blank');
+      location.href = url; // в этом же окне/вкладке, не новое
     });
     return btn;
   }
