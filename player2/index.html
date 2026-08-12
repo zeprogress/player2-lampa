@@ -443,6 +443,12 @@ function watchFrames(){
 // rVFC не срабатывает на паузе — без этого перемотка на паузе оставляла
 // текстуру на старом (или самом первом placeholder-) кадре.
 video.addEventListener('seeked', () => { videoDirty = true; });
+// У HLS.js (MediaSource) requestVideoFrameCallback иногда объявлен, но
+// реально не стреляет — экран оставался чёрным навсегда, хотя амбилайт
+// (отдельная выборка через drawImage на interval, без привязки к rVFC)
+// работал нормально. Подстраховка: обновляем текстуру минимум раз в ~60мс
+// в любом случае, даже если rVFC молчит.
+setInterval(() => { videoDirty = true; }, 60);
 
 let hls = null;
 function attachVideo(src, name){
@@ -460,9 +466,13 @@ function attachVideo(src, name){
   if (hls) { hls.destroy(); hls = null; }
 
   const isM3u8 = /\.m3u8(\?|$)/i.test(src.split('#')[0]);
-  const nativeHls = video.canPlayType('application/vnd.apple.mpegurl'); // Safari умеет сам
+  // canPlayType('application/vnd.apple.mpegurl') в некоторых сборках Chrome
+  // возвращает "maybe" (не пустую строку — то есть правдоподобно "да"),
+  // хотя реально HLS не тянет; полагаться на этот флаг нельзя. Раз HLS.js
+  // поддерживается (Hls.isSupported() проверяет наличие MediaSource) —
+  // всегда используем его, это надёжнее заявленной браузером «поддержки».
 
-  if (isM3u8 && !nativeHls && window.Hls && Hls.isSupported()) {
+  if (isM3u8 && window.Hls && Hls.isSupported()) {
     hls = new Hls();
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (data.fatal) log(`HLS ошибка: ${data.type} — ${data.details}`);
