@@ -56,7 +56,16 @@
 
     var groups = root.find('.player-panel__right .player-panel__box-buttons');
     debugNoty('групп кнопок найдено: ' + groups.length);
-    if (!groups.length) return;
+    if (!groups.length) {
+      // Печатать в консоли некому — просто показываем реальную разметку
+      // панели через alert (не требует ни клавиатуры, ни консоли, только
+      // кнопку "ОК"), чтобы поправить селектор по факту.
+      var dump = root.find('.player-panel__line-two').prop('outerHTML')
+        || root.find('.player-panel').prop('outerHTML')
+        || '(панель не найдена вообще)';
+      alert('[VR] разметка панели:\n' + String(dump).slice(0, 1800));
+      return;
+    }
 
     groups.each(function () {
       var group = $(this);
