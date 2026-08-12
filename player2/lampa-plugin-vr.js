@@ -19,14 +19,7 @@
 
   var VR_PLAYER_URL = 'https://zeprogress.github.io/player2-lampa/player2/index.html';
 
-  function addButton(streamUrl) {
-    var root = Lampa.Player.render();
-    if (!root || !root.length) return;
-
-    var group = root.find('.player-panel__right .player-panel__box-buttons').first();
-    if (!group.length) return;
-    if (group.find('.player-panel__vr').length) return; // уже добавлена
-
+  function makeButton(streamUrl) {
     var btn = $(
       '<div class="player-panel__vr button selector" title="Смотреть в VR">' +
         '<svg viewBox="0 0 24 24" width="22" height="22">' +
@@ -34,18 +27,42 @@
         '</svg>' +
       '</div>'
     );
-
     btn.on('hover:enter click', function () {
       var url = VR_PLAYER_URL + '?video=' + encodeURIComponent(streamUrl);
       window.open(url, '_blank');
     });
+    return btn;
+  }
 
-    group.prepend(btn);
+  // Разметка панели плеера у Lampa содержит НЕСКОЛЬКО .player-panel__right —
+  // отдельно для ТВ-раскладки (.player-panel__tv-visible, там несколько
+  // .player-panel__box-buttons: качество / дорожки-субтитры / настройки-pip)
+  // и отдельно для мобильной/десктопной (.player-panel__mobile-visible, там
+  // одна). Раньше кнопка добавлялась только в первую попавшуюся — если она
+  // относилась к скрытому в вашем режиме варианту, кнопки не было видно.
+  // Теперь добавляем во ВСЕ такие группы сразу.
+  function addButton(streamUrl) {
+    var root = Lampa.Player.render();
+    if (!root || !root.length) {
+      console.warn('[vr-plugin] Lampa.Player.render() пуст — панель ещё не создана');
+      return;
+    }
+
+    var groups = root.find('.player-panel__right .player-panel__box-buttons');
+    console.log('[vr-plugin] найдено групп кнопок:', groups.length);
+    if (!groups.length) return;
+
+    groups.each(function () {
+      var group = $(this);
+      if (group.find('.player-panel__vr').length) return; // уже добавлена
+      group.prepend(makeButton(streamUrl));
+    });
   }
 
   // 'ready' стреляет, когда плеер получил ссылку и готов играть —
   // data.url это уже разрешённый Lampa'ой прямой адрес потока.
   Lampa.Player.listener.follow('ready', function (data) {
+    console.log('[vr-plugin] событие ready', data);
     if (data && data.url) addButton(data.url);
   });
 })();
