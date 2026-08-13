@@ -213,27 +213,32 @@
         if (this.state[i] !== 'pending') return;
         this.state[i] = 'loading';
         var cue = this.cues[i];
+        console.log(LOG_PREFIX, 'синтезирую реплику', i, JSON.stringify(cue.text));
 
         synthOne(cue.text, 1).then(function (buf) {
+            console.log(LOG_PREFIX, 'реплика', i, 'получена от Fish Audio,', buf.byteLength, 'байт');
             return self.ctx.decodeAudioData(buf.slice(0)).then(function (audioBuf) {
                 var allowedMs = self.budgetMs(i) + OVERLAP_TOLERANCE_MS;
                 var synthMs = audioBuf.duration * 1000;
                 if (synthMs <= allowedMs) {
                     self.buffers[i] = audioBuf;
                     self.state[i] = 'ready';
+                    console.log(LOG_PREFIX, 'реплика', i, 'готова, ' + synthMs.toFixed(0) + 'мс, без коррекции скорости');
                     return;
                 }
                 // не уложились даже с запасом на наложение — досинтезируем с ускорением
                 var speed = synthMs / allowedMs;
+                console.log(LOG_PREFIX, 'реплика', i, 'не укладывается (' + synthMs.toFixed(0) + 'мс из ' + allowedMs.toFixed(0) + 'мс), ускоряю в', speed.toFixed(2), 'раза');
                 return synthOne(cue.text, speed).then(function (buf2) {
                     return self.ctx.decodeAudioData(buf2.slice(0));
                 }).then(function (audioBuf2) {
                     self.buffers[i] = audioBuf2;
                     self.state[i] = 'ready';
+                    console.log(LOG_PREFIX, 'реплика', i, 'готова после ускорения');
                 });
             });
         }).catch(function (err) {
-            console.warn('[ai-dub] synth failed for cue', i, cue.text, err);
+            console.warn(LOG_PREFIX, 'ошибка синтеза реплики', i, cue.text, err);
             self.state[i] = 'failed';
         });
     };
@@ -260,11 +265,17 @@
         if (this.destroyed) return;
         var nowVideoMs = this.video.currentTime * 1000;
         var self = this;
+        var inWindow = 0;
         this.cues.forEach(function (cue, i) {
             if (cue.start_ms - nowVideoMs <= LOOKAHEAD_MS && cue.start_ms >= nowVideoMs - 2000) {
+                inWindow++;
                 self.ensureSynthesized(i);
             }
         });
+        this._tickCount = (this._tickCount || 0) + 1;
+        if (this._tickCount % 5 === 1) {
+            console.log(LOG_PREFIX, 'tick, видео на', (nowVideoMs / 1000).toFixed(1) + 'с, реплик в окне поиска:', inWindow);
+        }
         this.scheduleReady();
     };
 
@@ -294,6 +305,8 @@
         if (current.timer) clearInterval(current.timer);
         if (current.video) {
             current.video.removeEventListener('seeked', current.onSeeked);
+            current.video.removeEventListener('play', current.onPlay);
+            current.video.removeEventListener('pause', current.onPause);
         }
         if (current.controller) current.controller.destroy();
         try { Lampa.PlayerVideo.volume(1); } catch (e) {}
@@ -318,9 +331,18 @@
             }
             var controller = new DubController(video, cues);
             var onSeeked = function () { controller.onSeek(); };
+            // AudioContext.suspend()/resume() останавливает и продолжает
+            // ЕГО ЖЕ временную шкалу — поэтому запланированные через
+            // src.start(ctx.currentTime + delay) реплики автоматически
+            // остаются синхронны с паузой видео, без ручного пересчёта.
+            var onPlay = function () { controller.ctx.resume(); };
+            var onPause = function () { controller.ctx.suspend(); };
             video.addEventListener('seeked', onSeeked);
+            video.addEventListener('play', onPlay);
+            video.addEventListener('pause', onPause);
+            if (video.paused) controller.ctx.suspend();
             var timer = setInterval(function () { controller.tick(); }, 1000);
-            current = { controller: controller, timer: timer, video: video, onSeeked: onSeeked };
+            current = { controller: controller, timer: timer, video: video, onSeeked: onSeeked, onPlay: onPlay, onPause: onPause };
             try { Lampa.PlayerVideo.volume(DUCK_VOLUME); } catch (e) {}
             controller.tick();
         }).catch(function (err) {
