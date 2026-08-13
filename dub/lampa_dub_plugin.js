@@ -422,26 +422,40 @@
         console.log(LOG_PREFIX, 'player start, enabled =', dubEnabled(), 'data =', data);
         if (!dubEnabled()) { console.log(LOG_PREFIX, 'выключено в настройках — выходим'); return; }
 
+        var videoUrl = (data && data.url) || (Lampa.PlayerVideo.video() && Lampa.PlayerVideo.video().currentSrc) || '';
+
+        // Для TorrServer-источников всегда переспрашиваем АКТУАЛЬНЫЙ индекс
+        // файла субтитров напрямую у TorrServer, а не берём снэпшот из
+        // data.subtitles: на самом первом открытии свежедобавленного
+        // торрента метаданные (список файлов/индексы) могли ещё не до
+        // конца устояться в момент события 'start', и Lampa могла отдать
+        // ссылку со "старым"/неверным index= — TorrServer на такой запрос
+        // просто никогда не ответит (не 404, а вечное ожидание). Именно
+        // это выглядело как "зависает при первом запуске, помогает только
+        // быстрый перезапуск плеера".
+        if (/\/stream\/[^?]*\?link=[0-9a-f]+/i.test(videoUrl)) {
+            console.log(LOG_PREFIX, 'источник — TorrServer, спрашиваю свежий индекс субтитров напрямую:', videoUrl);
+            findTorrserverSubtitleUrl(videoUrl).then(function (url) {
+                if (url) { console.log(LOG_PREFIX, 'нашёл субтитры через TorrServer:', url); startDub(url); return; }
+                console.warn(LOG_PREFIX, 'в этой раздаче не нашлось файла субтитров (.ass/.srt/.vtt) через TorrServer, пробую data.subtitles как запасной вариант');
+                var subs = (data && data.subtitles) || [];
+                if (subs.length) startDub(subs[0].url);
+                else console.warn(LOG_PREFIX, 'субтитров нигде не нашлось');
+            });
+            return;
+        }
+
         var subs = (data && data.subtitles) || [];
         if (!subs.length) {
             var pd = Lampa.Player.playdata && Lampa.Player.playdata();
             subs = (pd && pd.subtitles) || [];
         }
-
-        var videoUrl = (data && data.url) || (Lampa.PlayerVideo.video() && Lampa.PlayerVideo.video().currentSrc) || '';
-
         if (subs.length) {
             console.log(LOG_PREFIX, 'запускаю озвучку по дорожке из data.subtitles:', subs[0].url);
             startDub(subs[0].url);
-            return;
+        } else {
+            console.warn(LOG_PREFIX, 'у этого видео нет субтитровой дорожки');
         }
-
-        console.log(LOG_PREFIX, 'data.subtitles пуст, пробую спросить TorrServer напрямую по видео:', videoUrl);
-        findTorrserverSubtitleUrl(videoUrl).then(function (url) {
-            if (!url) { console.warn(LOG_PREFIX, 'в этой раздаче не нашлось файла субтитров (.ass/.srt/.vtt)'); return; }
-            console.log(LOG_PREFIX, 'нашёл субтитры через TorrServer:', url);
-            startDub(url);
-        });
     });
 
     Lampa.Player.listener.follow('destroy', function () {
