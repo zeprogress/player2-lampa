@@ -306,8 +306,15 @@
     // Подключение к плееру
     // ---------------------------------------------------------------
     var current = null; // { controller, timer }
+    // Lampa шлёт 'start' дважды подряд (предзагрузка + реальный запуск).
+    // Каждый вызов startDub() получает свой номер поколения; если пока
+    // старый fetch() субтитров ещё летит (например, завис на холодном
+    // старте торрента) стартовал более новый запуск — старый, долетев,
+    // не должен затирать уже рабочий current своим устаревшим состоянием.
+    var generation = 0;
 
     function stopCurrent() {
+        generation++; // любой ещё летящий fetch() субтитров из прошлого запуска теперь считается устаревшим
         if (!current) return;
         if (current.timer) clearInterval(current.timer);
         if (current.controller) current.controller.destroy();
@@ -320,10 +327,16 @@
         var video = Lampa.PlayerVideo.video();
         if (!video || !subtitleUrl) return;
 
+        var myGeneration = generation;
+
         fetch(subtitleUrl).then(function (r) {
             console.log(LOG_PREFIX, 'ответ на запрос субтитров:', r.status, r.ok, r.headers.get('content-type'), r.headers.get('content-length'));
             return r.text();
         }).then(function (text) {
+            if (myGeneration !== generation) {
+                console.log(LOG_PREFIX, 'этот запуск (#' + myGeneration + ') устарел, за это время стартовал #' + generation + ' — игнорирую результат');
+                return;
+            }
             console.log(LOG_PREFIX, 'текст субтитров, длина:', text.length, 'превью:', JSON.stringify(text.slice(0, 200)));
             var cues = parseSubtitles(subtitleUrl, text);
             console.log(LOG_PREFIX, 'распознано реплик:', cues.length);
@@ -331,10 +344,13 @@
                 console.warn('[ai-dub] субтитры пустые или не распознаны:', subtitleUrl);
                 return;
             }
+            // ещё раз проверяем поколение — пока парсили, мог подоспеть новый старт
+            if (myGeneration !== generation) return;
             // pause/play/перемотку контроллер отслеживает сам опросом в
             // tick() (см. DubController) — DOM-события тут не нужны и
             // ненадёжны, раз Lampa пересоздаёт <video> в процессе запуска.
-            var controller = new DubController(video, cues);
+            var liveVideo = Lampa.PlayerVideo.video() || video;
+            var controller = new DubController(liveVideo, cues);
             var timer = setInterval(function () { controller.tick(); }, 1000);
             current = { controller: controller, timer: timer };
             try { Lampa.PlayerVideo.volume(DUCK_VOLUME); } catch (e) {}
