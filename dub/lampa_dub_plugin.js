@@ -198,8 +198,15 @@
         this.buffers = new Array(cues.length);
         this.sources = [];
         this.destroyed = false;
-        this.baseVideoTime = video.currentTime;
-        this.baseCtxTime = this.ctx.currentTime;
+        // видео и пауза/перемотка отслеживаются ОПРОСОМ в tick(), а не через
+        // addEventListener на конкретном узле — Lampa, судя по всему,
+        // пересоздаёт <video> в процессе запуска воспроизведения, и любой
+        // слушатель, повешенный на старый узел, тихо перестаёт стрелять
+        // (currentTime у сохранённой ссылки застревал на 0, хотя в DOM
+        // реальный элемент уже играл и currentTime у него рос).
+        this.lastPaused = video.paused;
+        this.lastKnownMs = video.currentTime * 1000;
+        if (video.paused) this.ctx.suspend();
     }
 
     DubController.prototype.budgetMs = function (i) {
@@ -261,9 +268,39 @@
         });
     };
 
+    DubController.prototype.cancelScheduled = function () {
+        this.sources.forEach(function (src) { try { src.stop(); } catch (e) {} });
+        this.sources = [];
+        for (var i = 0; i < this.state.length; i++) {
+            if (this.state[i] === 'played') this.state[i] = this.buffers[i] ? 'ready' : 'pending';
+        }
+    };
+
     DubController.prototype.tick = function () {
         if (this.destroyed) return;
-        var nowVideoMs = this.video.currentTime * 1000;
+
+        // всегда спрашиваем актуальный <video> заново — см. комментарий
+        // в конструкторе про пересоздание элемента самой Lampa
+        var liveVideo = Lampa.PlayerVideo.video();
+        if (liveVideo) this.video = liveVideo;
+        var video = this.video;
+        var nowVideoMs = video.currentTime * 1000;
+
+        // пауза/резюм — опросом, не событием (см. конструктор)
+        if (video.paused !== this.lastPaused) {
+            this.lastPaused = video.paused;
+            if (video.paused) { this.ctx.suspend(); console.log(LOG_PREFIX, 'видео на паузе — глушу AudioContext'); }
+            else { this.ctx.resume(); console.log(LOG_PREFIX, 'видео продолжилось — возобновляю AudioContext'); }
+        }
+
+        // перемотка — опросом: скачок currentTime больше чем можно
+        // объяснить обычным ходом времени между тиками
+        if (Math.abs(nowVideoMs - this.lastKnownMs - 1000) > 2500) {
+            console.log(LOG_PREFIX, 'похоже на перемотку (' + (this.lastKnownMs / 1000).toFixed(1) + 'с -> ' + (nowVideoMs / 1000).toFixed(1) + 'с), сбрасываю запланированное');
+            this.cancelScheduled();
+        }
+        this.lastKnownMs = nowVideoMs;
+
         var self = this;
         var inWindow = 0;
         this.cues.forEach(function (cue, i) {
@@ -279,15 +316,6 @@
         this.scheduleReady();
     };
 
-    DubController.prototype.onSeek = function () {
-        // после перемотки все ранее запланированные источники не синхронны — глушим их
-        this.sources.forEach(function (src) { try { src.stop(); } catch (e) {} });
-        this.sources = [];
-        for (var i = 0; i < this.state.length; i++) {
-            if (this.state[i] === 'played') this.state[i] = this.buffers[i] ? 'ready' : 'pending';
-        }
-    };
-
     DubController.prototype.destroy = function () {
         this.destroyed = true;
         this.sources.forEach(function (src) { try { src.stop(); } catch (e) {} });
@@ -298,16 +326,11 @@
     // ---------------------------------------------------------------
     // Подключение к плееру
     // ---------------------------------------------------------------
-    var current = null; // { controller, timer, video, onSeeked }
+    var current = null; // { controller, timer }
 
     function stopCurrent() {
         if (!current) return;
         if (current.timer) clearInterval(current.timer);
-        if (current.video) {
-            current.video.removeEventListener('seeked', current.onSeeked);
-            current.video.removeEventListener('play', current.onPlay);
-            current.video.removeEventListener('pause', current.onPause);
-        }
         if (current.controller) current.controller.destroy();
         try { Lampa.PlayerVideo.volume(1); } catch (e) {}
         current = null;
@@ -329,20 +352,12 @@
                 console.warn('[ai-dub] субтитры пустые или не распознаны:', subtitleUrl);
                 return;
             }
+            // pause/play/перемотку контроллер отслеживает сам опросом в
+            // tick() (см. DubController) — DOM-события тут не нужны и
+            // ненадёжны, раз Lampa пересоздаёт <video> в процессе запуска.
             var controller = new DubController(video, cues);
-            var onSeeked = function () { controller.onSeek(); };
-            // AudioContext.suspend()/resume() останавливает и продолжает
-            // ЕГО ЖЕ временную шкалу — поэтому запланированные через
-            // src.start(ctx.currentTime + delay) реплики автоматически
-            // остаются синхронны с паузой видео, без ручного пересчёта.
-            var onPlay = function () { controller.ctx.resume(); };
-            var onPause = function () { controller.ctx.suspend(); };
-            video.addEventListener('seeked', onSeeked);
-            video.addEventListener('play', onPlay);
-            video.addEventListener('pause', onPause);
-            if (video.paused) controller.ctx.suspend();
             var timer = setInterval(function () { controller.tick(); }, 1000);
-            current = { controller: controller, timer: timer, video: video, onSeeked: onSeeked, onPlay: onPlay, onPause: onPause };
+            current = { controller: controller, timer: timer };
             try { Lampa.PlayerVideo.volume(DUCK_VOLUME); } catch (e) {}
             controller.tick();
         }).catch(function (err) {
