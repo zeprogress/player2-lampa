@@ -56,6 +56,23 @@
         return (id && VOICES[id]) ? id : DEFAULT_REFERENCE_ID;
     }
 
+    function applyVoiceChange(value) {
+        Lampa.Storage.set('ai_dub_voice', value);
+        console.log(LOG_PREFIX, 'голос изменён на:', VOICES[value] || value);
+        // ещё не прозвучавшие реплики пересинтезируем новым голосом — иначе
+        // до конца текущего сеанса звучал бы вперемешку старый (уже
+        // засинтезированный и закэшированный) и новый голос
+        if (current && current.controller) {
+            var c = current.controller;
+            for (var i = 0; i < c.state.length; i++) {
+                if (c.state[i] === 'ready' || c.state[i] === 'loading') {
+                    c.state[i] = 'pending';
+                    c.buffers[i] = undefined;
+                }
+            }
+        }
+    }
+
     var LOOKAHEAD_MS = 15000;      // на сколько вперёд по времени видео досинтезируем
     var OVERLAP_TOLERANCE_MS = 300; // сколько наложения на следующую реплику терпим
     var MAX_SPEED = 1.7;           // потолок ускорения речи; если не укладываемся даже на этом потолке — просто ускоряем до потолка и оставляем небольшое наложение, а не кашу из слов
@@ -113,22 +130,7 @@
             component: 'player',
             param: { name: 'ai_dub_voice', type: 'select', values: VOICES, default: DEFAULT_REFERENCE_ID },
             field: { name: 'Голос озвучки', description: 'Fish Audio voice' },
-            onChange: function (value) {
-                Lampa.Storage.set('ai_dub_voice', value);
-                console.log(LOG_PREFIX, 'голос изменён на:', VOICES[value] || value);
-                // ещё не прозвучавшие реплики пересинтезируем новым голосом —
-                // иначе до конца текущего сеанса звучал бы вперемешку старый
-                // (уже засинтезированный и закэшированный) и новый голос
-                if (current && current.controller) {
-                    var c = current.controller;
-                    for (var i = 0; i < c.state.length; i++) {
-                        if (c.state[i] === 'ready' || c.state[i] === 'loading') {
-                            c.state[i] = 'pending';
-                            c.buffers[i] = undefined;
-                        }
-                    }
-                }
-            }
+            onChange: function (value) { applyVoiceChange(value); }
         });
     } else {
         console.warn(LOG_PREFIX, 'Lampa.SettingsApi недоступен — плагин загружен слишком рано или это не та версия Lampa');
@@ -676,9 +678,50 @@
     // и пытался снова запустить озвучку на уже закрытом плеере.
     var playerActive = false;
 
+    // -----------------------------------------------------------------
+    // Кнопка выбора голоса прямо в панели плеера (не в общих Настройках).
+    // Внедрять пункт в штатное меню Subtitles/Quality/Settings нельзя —
+    // там приватный массив без точки расширения для плагинов. Рабочий
+    // паттерн (как у реального плагина Shots): своя кнопка в панели,
+    // открывающая свой Lampa.Select.show(...) попап.
+    // -----------------------------------------------------------------
+    function openVoiceSelect() {
+        var activeId = getReferenceId();
+        var items = Object.keys(VOICES).map(function (id) {
+            return { title: VOICES[id], id: id, selected: id === activeId };
+        });
+        Lampa.Select.show({
+            title: 'Голос озвучки',
+            items: items,
+            onSelect: function (item) { applyVoiceChange(item.id); },
+            onBack: function () {}
+        });
+    }
+
+    function ensureVoiceButton() {
+        if (!Lampa.PlayerPanel || !Lampa.PlayerPanel.render) return;
+        var panel = Lampa.PlayerPanel.render();
+        if (!panel || !panel.length || panel.find('.ai-dub-voice-btn').length) return;
+
+        var btn = document.createElement('div');
+        btn.className = 'button selector ai-dub-voice-btn';
+        btn.setAttribute('data-controller', 'player_panel');
+        btn.style.cssText = 'display:flex;align-items:center;justify-content:center;font-size:1.2em;';
+        btn.textContent = '🎙'; // 🎙
+        btn.addEventListener('click', openVoiceSelect);
+        if (window.$) $(btn).on('hover:enter', openVoiceSelect); // фокус-навигация пультом/клавиатурой
+
+        var settingsBtn = panel.find('.player-panel__settings');
+        if (settingsBtn.length) settingsBtn.after(btn);
+        else panel.append(btn);
+    }
+
     Lampa.Player.listener.follow('start', function (data) {
         console.log(LOG_PREFIX, 'player start, enabled =', dubEnabled(), 'data =', data);
         playerActive = true;
+        // панель плеера может отрисоваться чуть позже самого события 'start' —
+        // пробуем добавить кнопку несколько раз с небольшой паузой
+        [300, 800, 1500, 3000].forEach(function (ms) { setTimeout(ensureVoiceButton, ms); });
         if (!dubEnabled()) { console.log(LOG_PREFIX, 'выключено в настройках — выходим'); return; }
         var videoUrl = (data && data.url) || (Lampa.PlayerVideo.video() && Lampa.PlayerVideo.video().currentSrc) || '';
         handleVideoSource(videoUrl, data && data.subtitles);
