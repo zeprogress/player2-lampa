@@ -19,21 +19,19 @@
  *    и не бороться с play()/pause() гонками.
  *
  * Плагин публикуется на GitHub Pages (публичный репозиторий), поэтому
- * ключ Fish Audio в код НЕ зашивается — при первом запуске плагин
- * спрашивает его через prompt() и хранит локально в Lampa.Storage
- * (только в браузере пользователя, в самом коде/репозитории ключа нет).
+ * ключ Fish Audio в код НЕ зашивается — вводится текстовым полем в том
+ * же меню настроек, где включается сам дубляж, и хранится локально в
+ * Lampa.Storage (только в браузере пользователя, в коде/репозитории
+ * ключа нет).
  */
 (function () {
     'use strict';
     if (!window.Lampa) return;
 
+    var LOG_PREFIX = '[ai-dub]';
+
     function getApiKey() {
-        var key = Lampa.Storage.get('ai_dub_fish_key', '');
-        if (!key) {
-            key = (prompt('Введите API-ключ Fish Audio (fish.audio/app/developers):') || '').trim();
-            if (key) Lampa.Storage.set('ai_dub_fish_key', key);
-        }
-        return key;
+        return (Lampa.Storage.get('ai_dub_fish_key', '') || '').trim();
     }
 
     var FISH_MODEL = 's2.1-pro-free';
@@ -45,15 +43,23 @@
     var DUCK_VOLUME = 0.15;        // громкость оригинала при активной озвучке
 
     // ---------------------------------------------------------------
-    // Настройка: чекбокс "AI-озвучка" в Настройках плеера
+    // Настройка: тумблер + поле ввода ключа в Настройках плеера
     // ---------------------------------------------------------------
     if (Lampa.SettingsApi) {
         Lampa.SettingsApi.addParam({
             component: 'player',
             param: { name: 'ai_dub_enabled', type: 'trigger', default: false },
             field: { name: 'AI-озвучка (Fish Audio)', description: 'Экспериментальный синхронный ИИ-дубляж поверх оригинальной дорожки' },
-            onChange: function () {}
+            onChange: function () { console.log(LOG_PREFIX, 'toggle ->', Lampa.Storage.field('ai_dub_enabled')); }
         });
+        Lampa.SettingsApi.addParam({
+            component: 'player',
+            param: { name: 'ai_dub_fish_key', type: 'input', default: '' },
+            field: { name: 'Fish Audio API-ключ', description: 'fish.audio/app/developers' },
+            onChange: function () { console.log(LOG_PREFIX, 'ключ обновлён, длина:', getApiKey().length); }
+        });
+    } else {
+        console.warn(LOG_PREFIX, 'Lampa.SettingsApi недоступен — плагин загружен слишком рано или это не та версия Lampa');
     }
 
     function dubEnabled() {
@@ -301,16 +307,26 @@
     }
 
     Lampa.Player.listener.follow('start', function (data) {
-        if (!dubEnabled()) return;
-        var subs = data && data.subtitles;
-        if (!subs || !subs.length) return;
-        // берём первую доступную дорожку; если их несколько языков —
-        // пользователь всё равно выбирает субтитры через штатное меню Lampa,
-        // а здесь достаточно взять то же, что она уже показывает
+        console.log(LOG_PREFIX, 'player start, enabled =', dubEnabled(), 'data =', data);
+        if (!dubEnabled()) { console.log(LOG_PREFIX, 'выключено в настройках — выходим'); return; }
+        if (!getApiKey()) { console.warn(LOG_PREFIX, 'не задан API-ключ в настройках плеера'); return; }
+
+        var subs = (data && data.subtitles) || [];
+        if (!subs.length) {
+            // иногда к моменту события 'start' data.subtitles ещё пустой —
+            // пробуем то же самое через playdata() на всякий случай
+            var pd = Lampa.Player.playdata && Lampa.Player.playdata();
+            subs = (pd && pd.subtitles) || [];
+        }
+        if (!subs.length) { console.warn(LOG_PREFIX, 'у этого видео нет субтитровой дорожки (data.subtitles пуст)'); return; }
+
+        console.log(LOG_PREFIX, 'запускаю озвучку по дорожке:', subs[0].url);
         startDub(subs[0].url);
     });
 
     Lampa.Player.listener.follow('destroy', function () {
         stopCurrent();
     });
+
+    console.log(LOG_PREFIX, 'плагин загружен');
 })();
