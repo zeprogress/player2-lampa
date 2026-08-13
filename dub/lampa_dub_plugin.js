@@ -552,11 +552,10 @@
         });
     }
 
-    Lampa.Player.listener.follow('start', function (data) {
-        console.log(LOG_PREFIX, 'player start, enabled =', dubEnabled(), 'data =', data);
-        if (!dubEnabled()) { console.log(LOG_PREFIX, 'выключено в настройках — выходим'); return; }
+    var lastHandledVideoUrl = '';
 
-        var videoUrl = (data && data.url) || (Lampa.PlayerVideo.video() && Lampa.PlayerVideo.video().currentSrc) || '';
+    function handleVideoSource(videoUrl, dataSubtitles) {
+        lastHandledVideoUrl = videoUrl;
 
         // Для TorrServer-источников всегда переспрашиваем АКТУАЛЬНЫЙ индекс
         // файла субтитров напрямую у TorrServer, а не берём снэпшот из
@@ -572,14 +571,14 @@
             findTorrserverSubtitleUrl(videoUrl).then(function (url) {
                 if (url) { console.log(LOG_PREFIX, 'нашёл субтитры через TorrServer:', url); startDub(url); return; }
                 console.warn(LOG_PREFIX, 'в этой раздаче не нашлось файла субтитров (.ass/.srt/.vtt) через TorrServer, пробую data.subtitles как запасной вариант');
-                var subs = (data && data.subtitles) || [];
+                var subs = dataSubtitles || [];
                 if (subs.length) startDub(subs[0].url);
                 else console.warn(LOG_PREFIX, 'субтитров нигде не нашлось');
             });
             return;
         }
 
-        var subs = (data && data.subtitles) || [];
+        var subs = dataSubtitles || [];
         if (!subs.length) {
             var pd = Lampa.Player.playdata && Lampa.Player.playdata();
             subs = (pd && pd.subtitles) || [];
@@ -590,11 +589,34 @@
         } else {
             console.warn(LOG_PREFIX, 'у этого видео нет субтитровой дорожки');
         }
+    }
+
+    Lampa.Player.listener.follow('start', function (data) {
+        console.log(LOG_PREFIX, 'player start, enabled =', dubEnabled(), 'data =', data);
+        if (!dubEnabled()) { console.log(LOG_PREFIX, 'выключено в настройках — выходим'); return; }
+        var videoUrl = (data && data.url) || (Lampa.PlayerVideo.video() && Lampa.PlayerVideo.video().currentSrc) || '';
+        handleVideoSource(videoUrl, data && data.subtitles);
     });
 
     Lampa.Player.listener.follow('destroy', function () {
         stopCurrent();
+        lastHandledVideoUrl = '';
     });
+
+    // Сторож автоперехода на следующую серию/эпизод: плеер при этом не
+    // всегда шлёт 'start' заново (сам <video> не пересоздаётся, просто
+    // подгружает новый src) — без этого плагин продолжал бы озвучивать
+    // по субтитрам ПРЕДЫДУЩЕЙ серии поверх уже другого видео. Опрашиваем
+    // src живого видео независимо от событий плеера и сравниваем с тем,
+    // под что сейчас реально настроена озвучка.
+    setInterval(function () {
+        if (!dubEnabled()) return;
+        var video = Lampa.PlayerVideo.video();
+        var src = video && (video.currentSrc || video.src);
+        if (!src || src === lastHandledVideoUrl) return;
+        console.log(LOG_PREFIX, 'обнаружил смену видео без события player-start (похоже на автопереход к следующей серии):', src);
+        handleVideoSource(src, null);
+    }, 2000);
 
     console.log(LOG_PREFIX, 'плагин загружен');
 })();
