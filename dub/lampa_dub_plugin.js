@@ -706,7 +706,7 @@
         var btn = document.createElement('div');
         btn.className = 'button selector ai-dub-voice-btn';
         btn.setAttribute('data-controller', 'player_panel');
-        btn.style.cssText = 'display:flex;align-items:center;justify-content:center;font-size:1.2em;';
+        btn.style.cssText = 'display:flex;align-items:center;justify-content:center;font-size:0.85em;';
         btn.textContent = '🎙'; // 🎙
         btn.addEventListener('click', openVoiceSelect);
         if (window.$) $(btn).on('hover:enter', openVoiceSelect); // фокус-навигация пультом/клавиатурой
