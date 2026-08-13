@@ -42,6 +42,7 @@
     var OVERLAP_TOLERANCE_MS = 300; // сколько наложения на следующую реплику терпим
     var DUCK_VOLUME = 0.15;        // громкость оригинала при активной озвучке
     var SUB_FETCH_TIMEOUT_MS = 120000; // сколько ждать субтитры от TorrServer на холодном торренте
+    var SEEK_SETTLE_MS = 1500;     // сколько ждать после перемотки, пока currentTime не перестанет скакать
 
     // ---------------------------------------------------------------
     // Настройка: тумблер "AI-озвучка" в Настройках плеера
@@ -189,6 +190,7 @@
         if (video.paused) this.ctx.suspend();
         this.activeWindows = []; // [{start_ms, end_ms}] — когда реально звучит синтезированная реплика
         this.ducked = false;
+        this.seekSettleUntil = 0;
     }
 
     DubController.prototype.budgetMs = function (i) {
@@ -268,6 +270,11 @@
         for (var i = 0; i < this.state.length; i++) {
             if (this.state[i] === 'played') this.state[i] = this.buffers[i] ? 'ready' : 'pending';
         }
+        this.activeWindows = [];
+        if (this.ducked) {
+            this.ducked = false;
+            try { Lampa.PlayerVideo.volume(1); } catch (e) {}
+        }
     };
 
     DubController.prototype.tick = function () {
@@ -301,12 +308,24 @@
             }
         }
 
-        // перемотка — сбрасываем всё запланированное, т.к. тайминги больше не актуальны
+        // перемотка — сбрасываем всё запланированное, т.к. тайминги больше не актуальны.
+        // Дальше даём позиции "устояться" (SEEK_SETTLE_MS): после перемотки
+        // видео/TorrServer может ещё пару тиков дёргаться (буферизация на
+        // новом месте), и если планировать реплики сразу по нестабильному
+        // currentTime — получается "волна" из нескольких реплик почти
+        // одновременно, невпопад. Планирование заново включаем только
+        // когда currentTime перестаёт скакать.
         if (isSeek) {
-            console.log(LOG_PREFIX, 'похоже на перемотку (' + (this.lastKnownMs / 1000).toFixed(1) + 'с -> ' + (nowVideoMs / 1000).toFixed(1) + 'с), сбрасываю запланированное');
+            console.log(LOG_PREFIX, 'похоже на перемотку (' + (this.lastKnownMs / 1000).toFixed(1) + 'с -> ' + (nowVideoMs / 1000).toFixed(1) + 'с), сбрасываю запланированное и жду стабилизации');
             this.cancelScheduled();
+            this.seekSettleUntil = Date.now() + SEEK_SETTLE_MS;
         }
         this.lastKnownMs = nowVideoMs;
+
+        if (this.seekSettleUntil && Date.now() < this.seekSettleUntil) {
+            return; // ждём, пока позиция устаканится, ничего не планируем в этот тик
+        }
+        this.seekSettleUntil = 0;
 
         var self = this;
         var inWindow = 0;
