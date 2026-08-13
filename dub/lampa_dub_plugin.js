@@ -310,24 +310,22 @@
         this.activeWindows = this.activeWindows.filter(function (w) { return w.end_ms >= nowVideoMs - 200; });
         var shouldDuck = this.activeWindows.some(function (w) { return nowVideoMs >= w.start_ms && nowVideoMs <= w.end_ms; });
 
-        // пока не приглушено И не идёт наша собственная анимация громкости —
-        // video.volume отражает то, что пользователь сам выставил штатным
-        // регулятором Lampa; подхватываем это как текущую "базовую"
-        // громкость, чтобы и приглушение оригинала, и громкость самого
-        // дубляжа (через gainNode) масштабировались синхронно с ней.
-        // ВАЖНО: используем this.ducked (состояние ДО этого тика), а не
-        // shouldDuck (уже посчитанное новое) — иначе ровно на тике, где
-        // приглушение только-только заканчивается, video.volume ещё сидит
-        // на приглушённом значении (рамп восстановления ещё не запущен, а
-        // рамп приглушения уже давно завершился, isVolumeRamping()==false),
-        // и это read-before-restore ошибочно принимается за "пользователь
-        // сам убавил громкость" — с каждой репликой громкость садится всё
-        // сильнее (положительная обратная связь).
-        if (!shouldDuck && !this.ducked && !isVolumeRamping()) {
-            var liveVol = Math.max(0, Math.min(1, this.video.volume));
-            if (Math.abs(liveVol - this.masterVolume) > 0.001) {
-                this.masterVolume = liveVol;
+        // Источник "какая громкость нужна пользователю" — Lampa.Storage
+        // ('player_volume'), КУДА МЫ САМИ НИКОГДА НЕ ПИШЕМ, а не сам
+        // video.volume: тот video.volume мы же и дёргаем при
+        // приглушении/восстановлении, и любая попытка читать его как
+        // "живой пользовательский ввод" рано или поздно ловит момент,
+        // когда там ещё/уже наше собственное временное значение —
+        // это и давало положительную обратную связь, из-за которой
+        // громкость с каждой репликой садилась всё сильнее. Storage же
+        // меняется ТОЛЬКО когда пользователь сам трогает штатный регулятор.
+        var storedVol = Lampa.Storage.get('player_volume', null);
+        if (storedVol !== null) {
+            storedVol = Math.max(0, Math.min(1, parseFloat(storedVol)));
+            if (!isNaN(storedVol) && Math.abs(storedVol - this.masterVolume) > 0.005) {
+                this.masterVolume = storedVol;
                 this.gainNode.gain.value = this.masterVolume;
+                if (!shouldDuck) rampVolume(this.video, this.masterVolume, 80);
             }
         }
 
