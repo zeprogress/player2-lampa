@@ -41,7 +41,9 @@
     var LOOKAHEAD_MS = 15000;      // на сколько вперёд по времени видео досинтезируем
     var OVERLAP_TOLERANCE_MS = 300; // сколько наложения на следующую реплику терпим
     var DUCK_VOLUME = 0.15;        // громкость оригинала при активной озвучке
-    var DUCK_RAMP_MS = 250;        // за сколько плавно менять громкость при приглушении/восстановлении
+    var DUCK_IN_RAMP_MS = 120;     // приглушение перед репликой — резче
+    var DUCK_OUT_RAMP_MS = 300;    // восстановление после реплики — чуть плавнее
+    var DUCKING_CHECK_MS = 120;    // как часто проверять окна приглушения (чаще, чем общий tick — иначе короткие/наложенные реплики проваливаются между замерами раз в секунду)
     var SUB_FETCH_TIMEOUT_MS = 120000; // сколько ждать субтитры от TorrServer на холодном торренте
     var SEEK_SETTLE_MS = 1500;     // сколько ждать после перемотки, пока currentTime не перестанет скакать
 
@@ -279,13 +281,19 @@
         });
     };
 
-    DubController.prototype.updateDucking = function (nowVideoMs) {
-        // чистим окна, которые уже прозвучали
+    DubController.prototype.updateDucking = function () {
+        if (this.destroyed || !this.video) return;
+        // читаем currentTime заново сами — этот метод дёргается отдельным
+        // частым таймером (DUCKING_CHECK_MS), не общим 1-секундным tick():
+        // короткие/наложенные реплики могут целиком провалиться между
+        // замерами раз в секунду, из-за чего звук успевал "прорваться"
+        // на полную громкость посреди фразы.
+        var nowVideoMs = this.video.currentTime * 1000;
         this.activeWindows = this.activeWindows.filter(function (w) { return w.end_ms >= nowVideoMs - 200; });
         var shouldDuck = this.activeWindows.some(function (w) { return nowVideoMs >= w.start_ms && nowVideoMs <= w.end_ms; });
         if (shouldDuck === this.ducked) return;
         this.ducked = shouldDuck;
-        rampVolume(this.video, shouldDuck ? DUCK_VOLUME : 1, DUCK_RAMP_MS);
+        rampVolume(this.video, shouldDuck ? DUCK_VOLUME : 1, shouldDuck ? DUCK_IN_RAMP_MS : DUCK_OUT_RAMP_MS);
     };
 
     DubController.prototype.cancelScheduled = function () {
@@ -297,7 +305,7 @@
         this.activeWindows = [];
         if (this.ducked) {
             this.ducked = false;
-            rampVolume(this.video, 1, DUCK_RAMP_MS);
+            rampVolume(this.video, 1, DUCK_OUT_RAMP_MS);
         }
     };
 
@@ -364,7 +372,7 @@
             console.log(LOG_PREFIX, 'tick, видео на', (nowVideoMs / 1000).toFixed(1) + 'с, реплик в окне поиска:', inWindow);
         }
         this.scheduleReady();
-        this.updateDucking(nowVideoMs);
+        // приглушение обновляется своим отдельным частым таймером (см. startDub), не тут
     };
 
     DubController.prototype.destroy = function () {
@@ -389,6 +397,7 @@
         generation++; // любой ещё летящий fetch() субтитров из прошлого запуска теперь считается устаревшим
         if (!current) return;
         if (current.timer) clearInterval(current.timer);
+        if (current.duckTimer) clearInterval(current.duckTimer);
         if (current.controller) current.controller.destroy();
         try { Lampa.PlayerVideo.volume(1); } catch (e) {}
         current = null;
@@ -441,11 +450,13 @@
             var liveVideo = Lampa.PlayerVideo.video() || video;
             var controller = new DubController(liveVideo, cues);
             var timer = setInterval(function () { controller.tick(); }, 1000);
-            current = { controller: controller, timer: timer };
-            // громкость приглушается/восстанавливается динамически из
-            // DubController.updateDucking() только на время реального
-            // звучания реплики, не на всё время работы озвучки
+            // приглушение — отдельным частым таймером, а не общим 1-секундным
+            // tick(): короткие/наложенные реплики иначе проваливались между
+            // редкими замерами, и звук успевал прорваться на полную громкость
+            var duckTimer = setInterval(function () { controller.updateDucking(); }, DUCKING_CHECK_MS);
+            current = { controller: controller, timer: timer, duckTimer: duckTimer };
             controller.tick();
+            controller.updateDucking();
         }).catch(function (err) {
             clearInterval(heartbeat);
             clearTimeout(timeoutTimer);
