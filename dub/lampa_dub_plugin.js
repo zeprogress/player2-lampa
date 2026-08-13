@@ -315,6 +315,40 @@
         });
     }
 
+    // -----------------------------------------------------------------
+    // Резервный путь: для торрент-источников (TorrServer) Lampa часто НЕ
+    // заполняет data.subtitles — субтитровый файл в такой раздаче просто
+    // ещё один файл торрента (например, .ass рядом с .mkv), а не отдельно
+    // объявленная "дорожка". Спрашиваем список файлов у самого TorrServer
+    // (тот же хост, что отдаёт видео) и ищем .srt/.ass/.vtt в той же папке.
+    // -----------------------------------------------------------------
+    var SUB_EXT_RE = /\.(ass|ssa|srt|vtt)$/i;
+
+    function findTorrserverSubtitleUrl(videoUrl) {
+        var m = /^(https?:\/\/[^/]+)\/stream\/[^?]*\?link=([0-9a-f]+)/i.exec(videoUrl || '');
+        if (!m) return Promise.resolve(null);
+        var origin = m[1], hash = m[2];
+
+        return fetch(origin + '/torrents', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'get', hash: hash })
+        }).then(function (r) { return r.json(); }).then(function (torrent) {
+            var files = (torrent && torrent.file_stats) || [];
+            var videoPath = decodeURIComponent(videoUrl.split('/stream/')[1].split('?')[0]);
+            var videoDir = videoPath.substring(0, videoPath.lastIndexOf('/'));
+            var candidate = files.find(function (f) {
+                return SUB_EXT_RE.test(f.path) && f.path.substring(0, f.path.lastIndexOf('/')) === videoDir;
+            }) || files.find(function (f) { return SUB_EXT_RE.test(f.path); }); // не нашли рядом — берём любой сабовый файл в раздаче
+            if (!candidate) return null;
+            var basename = candidate.path.split('/').pop();
+            return origin + '/stream/' + encodeURIComponent(basename) + '?link=' + hash + '&index=' + candidate.id + '&play';
+        }).catch(function (err) {
+            console.warn(LOG_PREFIX, 'не удалось опросить TorrServer на предмет субтитров', err);
+            return null;
+        });
+    }
+
     Lampa.Player.listener.follow('start', function (data) {
         console.log(LOG_PREFIX, 'player start, enabled =', dubEnabled(), 'data =', data);
         if (!dubEnabled()) { console.log(LOG_PREFIX, 'выключено в настройках — выходим'); return; }
@@ -322,15 +356,24 @@
 
         var subs = (data && data.subtitles) || [];
         if (!subs.length) {
-            // иногда к моменту события 'start' data.subtitles ещё пустой —
-            // пробуем то же самое через playdata() на всякий случай
             var pd = Lampa.Player.playdata && Lampa.Player.playdata();
             subs = (pd && pd.subtitles) || [];
         }
-        if (!subs.length) { console.warn(LOG_PREFIX, 'у этого видео нет субтитровой дорожки (data.subtitles пуст)'); return; }
 
-        console.log(LOG_PREFIX, 'запускаю озвучку по дорожке:', subs[0].url);
-        startDub(subs[0].url);
+        var videoUrl = (data && data.url) || (Lampa.PlayerVideo.video() && Lampa.PlayerVideo.video().currentSrc) || '';
+
+        if (subs.length) {
+            console.log(LOG_PREFIX, 'запускаю озвучку по дорожке из data.subtitles:', subs[0].url);
+            startDub(subs[0].url);
+            return;
+        }
+
+        console.log(LOG_PREFIX, 'data.subtitles пуст, пробую спросить TorrServer напрямую по видео:', videoUrl);
+        findTorrserverSubtitleUrl(videoUrl).then(function (url) {
+            if (!url) { console.warn(LOG_PREFIX, 'в этой раздаче не нашлось файла субтитров (.ass/.srt/.vtt)'); return; }
+            console.log(LOG_PREFIX, 'нашёл субтитры через TorrServer:', url);
+            startDub(url);
+        });
     });
 
     Lampa.Player.listener.follow('destroy', function () {
