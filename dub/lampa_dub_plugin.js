@@ -41,6 +41,7 @@
     var LOOKAHEAD_MS = 15000;      // на сколько вперёд по времени видео досинтезируем
     var OVERLAP_TOLERANCE_MS = 300; // сколько наложения на следующую реплику терпим
     var MAX_SPEED = 1.7;           // потолок ускорения речи; если не укладываемся даже на этом потолке — просто ускоряем до потолка и оставляем небольшое наложение, а не кашу из слов
+    var MAX_DRIFT_MS = 2500;       // насколько можно отстать от тайминга субтитров, играя реплики подряд без наложения, прежде чем смириться с наложением и вернуться к таймингу
     var DUCK_FACTOR = 0.15;        // во сколько раз приглушать оригинал ОТНОСИТЕЛЬНО текущей громкости пользователя
     var DUCK_IN_RAMP_MS = 120;     // приглушение перед репликой — резче
     var DUCK_OUT_RAMP_MS = 300;    // восстановление после реплики — чуть плавнее
@@ -227,6 +228,7 @@
         this.activeWindows = []; // [{start_ms, end_ms}] — когда реально звучит синтезированная реплика
         this.ducked = false;
         this.seekSettleUntil = 0;
+        this.audioCursorMs = -Infinity; // до какого момента (по видео) уже "занято" предыдущей репликой — см. scheduleReady
 
         // громкость дубляжа синхронна с той, что пользователь выставил
         // штатным регулятором Lampa (она же и хранит её между сессиями) —
@@ -290,15 +292,35 @@
             var delaySec = (cue.start_ms - nowVideoMs) / 1000;
             if (delaySec > (LOOKAHEAD_MS / 1000) + 1) return; // ещё рано планировать
             self.state[i] = 'played';
+
+            var durationMs = self.buffers[i].duration * 1000;
+            // Если предыдущая реплика ещё звучит к моменту старта этой —
+            // вместо наложения голосов сдвигаем старт этой реплики на
+            // момент, когда предыдущая реально закончится (последовательно,
+            // без наложения), но не больше чем на MAX_DRIFT_MS относительно
+            // её собственного места по субтитрам — иначе рассинхрон с
+            // видео будет только расти. Если сдвиг превысил бы потолок,
+            // возвращаемся к обычному наложению и сбрасываем "курсор",
+            // чтобы дальше снова идти по факту субтитров.
+            var actualStartMs = cue.start_ms;
+            if (self.audioCursorMs > cue.start_ms) {
+                var drift = self.audioCursorMs - cue.start_ms;
+                if (drift <= MAX_DRIFT_MS) {
+                    actualStartMs = self.audioCursorMs;
+                } // иначе оставляем actualStartMs = cue.start_ms — пусть лучше наложится, чем разъедется совсем
+            }
+            self.audioCursorMs = actualStartMs + durationMs;
+
+            var startDelaySec = (actualStartMs - nowVideoMs) / 1000;
             var src = self.ctx.createBufferSource();
             src.buffer = self.buffers[i];
             src.connect(self.gainNode);
-            var startAt = self.ctx.currentTime + Math.max(0, delaySec);
+            var startAt = self.ctx.currentTime + Math.max(0, startDelaySec);
             src.start(startAt);
             self.sources.push(src);
             // окно, в которое реально звучит эта реплика — по нему приглушаем
             // оригинал, а не постоянно на всё время работы озвучки
-            self.activeWindows.push({ start_ms: cue.start_ms, end_ms: cue.start_ms + self.buffers[i].duration * 1000 });
+            self.activeWindows.push({ start_ms: actualStartMs, end_ms: actualStartMs + durationMs });
         });
     };
 
@@ -349,6 +371,7 @@
             if (this.state[i] === 'played') this.state[i] = this.buffers[i] ? 'ready' : 'pending';
         }
         this.activeWindows = [];
+        this.audioCursorMs = -Infinity; // после перемотки старый "курсор" бессмысленен
         if (this.ducked) {
             this.ducked = false;
             rampVolume(this.video, this.masterVolume, DUCK_OUT_RAMP_MS);
