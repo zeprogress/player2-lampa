@@ -40,7 +40,7 @@
 
     var LOOKAHEAD_MS = 15000;      // на сколько вперёд по времени видео досинтезируем
     var OVERLAP_TOLERANCE_MS = 300; // сколько наложения на следующую реплику терпим
-    var DUCK_VOLUME = 0.15;        // громкость оригинала при активной озвучке
+    var DUCK_FACTOR = 0.15;        // во сколько раз приглушать оригинал ОТНОСИТЕЛЬНО текущей громкости пользователя
     var DUCK_IN_RAMP_MS = 120;     // приглушение перед репликой — резче
     var DUCK_OUT_RAMP_MS = 300;    // восстановление после реплики — чуть плавнее
     var DUCKING_CHECK_MS = 120;    // как часто проверять окна приглушения (чаще, чем общий tick — иначе короткие/наложенные реплики проваливаются между замерами раз в секунду)
@@ -217,6 +217,15 @@
         this.activeWindows = []; // [{start_ms, end_ms}] — когда реально звучит синтезированная реплика
         this.ducked = false;
         this.seekSettleUntil = 0;
+
+        // громкость дубляжа синхронна с той, что пользователь выставил
+        // штатным регулятором Lampa (она же и хранит её между сессиями) —
+        // отдельного UI/настройки для громкости озвучки не делаем, просто
+        // масштабируем реплики относительно текущей громкости видео.
+        this.masterVolume = Math.max(0, Math.min(1, video.volume));
+        this.gainNode = this.ctx.createGain();
+        this.gainNode.connect(this.ctx.destination);
+        this.gainNode.gain.value = this.masterVolume;
     }
 
     DubController.prototype.budgetMs = function (i) {
@@ -271,7 +280,7 @@
             self.state[i] = 'played';
             var src = self.ctx.createBufferSource();
             src.buffer = self.buffers[i];
-            src.connect(self.ctx.destination);
+            src.connect(self.gainNode);
             var startAt = self.ctx.currentTime + Math.max(0, delaySec);
             src.start(startAt);
             self.sources.push(src);
@@ -291,9 +300,29 @@
         var nowVideoMs = this.video.currentTime * 1000;
         this.activeWindows = this.activeWindows.filter(function (w) { return w.end_ms >= nowVideoMs - 200; });
         var shouldDuck = this.activeWindows.some(function (w) { return nowVideoMs >= w.start_ms && nowVideoMs <= w.end_ms; });
+
+        // пока не приглушено — video.volume отражает то, что пользователь
+        // сам выставил штатным регулятором Lampa; подхватываем это как
+        // текущую "базовую" громкость, чтобы и приглушение оригинала, и
+        // громкость самого дубляжа (через gainNode) масштабировались
+        // синхронно с ней. Во время приглушения video.volume специально
+        // занижен нами же, поэтому в этот момент за живым значением не следим.
+        if (!shouldDuck) {
+            var liveVol = Math.max(0, Math.min(1, this.video.volume));
+            if (Math.abs(liveVol - this.masterVolume) > 0.001) {
+                this.masterVolume = liveVol;
+                this.gainNode.gain.value = this.masterVolume;
+            }
+        }
+
         if (shouldDuck === this.ducked) return;
         this.ducked = shouldDuck;
-        rampVolume(this.video, shouldDuck ? DUCK_VOLUME : 1, shouldDuck ? DUCK_IN_RAMP_MS : DUCK_OUT_RAMP_MS);
+        if (shouldDuck) {
+            rampVolume(this.video, this.masterVolume * DUCK_FACTOR, DUCK_IN_RAMP_MS);
+            this.gainNode.gain.value = this.masterVolume; // дубляж сам звучит на полной пользовательской громкости
+        } else {
+            rampVolume(this.video, this.masterVolume, DUCK_OUT_RAMP_MS);
+        }
     };
 
     DubController.prototype.cancelScheduled = function () {
@@ -305,7 +334,7 @@
         this.activeWindows = [];
         if (this.ducked) {
             this.ducked = false;
-            rampVolume(this.video, 1, DUCK_OUT_RAMP_MS);
+            rampVolume(this.video, this.masterVolume, DUCK_OUT_RAMP_MS);
         }
     };
 
@@ -398,8 +427,12 @@
         if (!current) return;
         if (current.timer) clearInterval(current.timer);
         if (current.duckTimer) clearInterval(current.duckTimer);
+        // возвращаем громкость видео на ту, что реально выставил пользователь
+        // (а не жёстко на 1) — если сейчас приглушено по нашей вине
+        if (current.controller && current.controller.ducked && current.controller.video) {
+            try { current.controller.video.volume = current.controller.masterVolume; } catch (e) {}
+        }
         if (current.controller) current.controller.destroy();
-        try { Lampa.PlayerVideo.volume(1); } catch (e) {}
         current = null;
     }
 
