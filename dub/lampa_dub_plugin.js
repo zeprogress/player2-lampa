@@ -184,8 +184,8 @@
         // слушатель, повешенный на старый узел, тихо перестаёт стрелять
         // (currentTime у сохранённой ссылки застревал на 0, хотя в DOM
         // реальный элемент уже играл и currentTime у него рос).
-        this.lastPaused = video.paused;
         this.lastKnownMs = video.currentTime * 1000;
+        this.ctxSuspended = video.paused;
         if (video.paused) this.ctx.suspend();
         this.activeWindows = []; // [{start_ms, end_ms}] — когда реально звучит синтезированная реплика
         this.ducked = false;
@@ -280,16 +280,29 @@
         var video = this.video;
         var nowVideoMs = video.currentTime * 1000;
 
-        // пауза/резюм — опросом, не событием (см. конструктор)
-        if (video.paused !== this.lastPaused) {
-            this.lastPaused = video.paused;
-            if (video.paused) { this.ctx.suspend(); console.log(LOG_PREFIX, 'видео на паузе — глушу AudioContext'); }
-            else { this.ctx.resume(); console.log(LOG_PREFIX, 'видео продолжилось — возобновляю AudioContext'); }
+        var advancingMs = nowVideoMs - this.lastKnownMs;
+        var isSeek = Math.abs(advancingMs - 1000) > 2500; // большой скачок — перемотка
+        // буферизация: видео.paused остаётся false, когда браузер просто
+        // ждёт данных (readyState/"waiting") — currentTime при этом почти
+        // не двигается. Раньше мы следили только за paused, и AudioContext
+        // продолжал идти своим ходом, играя реплики по расписанию, пока
+        // зависшее видео стояло на месте ("озвучка на несколько фраз вперёд").
+        var isStalled = !video.paused && !isSeek && advancingMs < 200;
+        var shouldSuspend = video.paused || isStalled;
+
+        if (shouldSuspend !== this.ctxSuspended) {
+            this.ctxSuspended = shouldSuspend;
+            if (shouldSuspend) {
+                this.ctx.suspend();
+                console.log(LOG_PREFIX, video.paused ? 'видео на паузе — глушу AudioContext' : 'видео зависло на буферизации — глушу AudioContext');
+            } else {
+                this.ctx.resume();
+                console.log(LOG_PREFIX, 'видео продолжилось — возобновляю AudioContext');
+            }
         }
 
-        // перемотка — опросом: скачок currentTime больше чем можно
-        // объяснить обычным ходом времени между тиками
-        if (Math.abs(nowVideoMs - this.lastKnownMs - 1000) > 2500) {
+        // перемотка — сбрасываем всё запланированное, т.к. тайминги больше не актуальны
+        if (isSeek) {
             console.log(LOG_PREFIX, 'похоже на перемотку (' + (this.lastKnownMs / 1000).toFixed(1) + 'с -> ' + (nowVideoMs / 1000).toFixed(1) + 'с), сбрасываю запланированное');
             this.cancelScheduled();
         }
