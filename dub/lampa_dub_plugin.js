@@ -41,6 +41,7 @@
     var LOOKAHEAD_MS = 15000;      // на сколько вперёд по времени видео досинтезируем
     var OVERLAP_TOLERANCE_MS = 300; // сколько наложения на следующую реплику терпим
     var DUCK_VOLUME = 0.15;        // громкость оригинала при активной озвучке
+    var SUB_FETCH_TIMEOUT_MS = 120000; // сколько ждать субтитры от TorrServer на холодном торренте
 
     // ---------------------------------------------------------------
     // Настройка: тумблер "AI-озвучка" в Настройках плеера
@@ -328,11 +329,28 @@
         if (!video || !subtitleUrl) return;
 
         var myGeneration = generation;
+        var startedAt = Date.now();
 
-        fetch(subtitleUrl).then(function (r) {
+        // холодный торрент: TorrServer может отдавать субтитровый файл
+        // отдельно от видео (свой приоритет пиров/кусков) и молчать до
+        // ~90с при первом обращении — печатаем "жду ещё" вместо тишины,
+        // чтобы не выглядело зависшим, и прекращаем ждать через SUB_FETCH_TIMEOUT_MS.
+        var heartbeat = setInterval(function () {
+            if (myGeneration !== generation) { clearInterval(heartbeat); return; }
+            console.log(LOG_PREFIX, 'всё ещё жду субтитры от TorrServer (' + ((Date.now() - startedAt) / 1000).toFixed(0) + 'с) — это нормально для только что открытого торрента, ждём пиров');
+        }, 10000);
+        var abortController = new AbortController();
+        var timeoutTimer = setTimeout(function () {
+            console.warn(LOG_PREFIX, 'TorrServer не отдал субтитры за ' + (SUB_FETCH_TIMEOUT_MS / 1000) + 'с, обрываю запрос и сдаюсь на этот запуск');
+            abortController.abort();
+        }, SUB_FETCH_TIMEOUT_MS);
+
+        fetch(subtitleUrl, { signal: abortController.signal }).then(function (r) {
             console.log(LOG_PREFIX, 'ответ на запрос субтитров:', r.status, r.ok, r.headers.get('content-type'), r.headers.get('content-length'));
             return r.text();
         }).then(function (text) {
+            clearInterval(heartbeat);
+            clearTimeout(timeoutTimer);
             if (myGeneration !== generation) {
                 console.log(LOG_PREFIX, 'этот запуск (#' + myGeneration + ') устарел, за это время стартовал #' + generation + ' — игнорирую результат');
                 return;
@@ -356,7 +374,13 @@
             try { Lampa.PlayerVideo.volume(DUCK_VOLUME); } catch (e) {}
             controller.tick();
         }).catch(function (err) {
-            console.warn('[ai-dub] не удалось загрузить субтитры', err);
+            clearInterval(heartbeat);
+            clearTimeout(timeoutTimer);
+            if (err && err.name === 'AbortError') {
+                console.warn(LOG_PREFIX, 'не дождались субтитров от TorrServer за ' + (SUB_FETCH_TIMEOUT_MS / 1000) + 'с — торрент слишком холодный или пиров нет');
+            } else {
+                console.warn(LOG_PREFIX, 'не удалось загрузить субтитры', err);
+            }
         });
     }
 
