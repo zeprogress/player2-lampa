@@ -40,6 +40,7 @@
 
     var LOOKAHEAD_MS = 15000;      // на сколько вперёд по времени видео досинтезируем
     var OVERLAP_TOLERANCE_MS = 300; // сколько наложения на следующую реплику терпим
+    var MAX_SPEED = 1.35;          // потолок ускорения речи — Fish Audio разрешает до 2.0, но уже после ~1.3-1.4 разобрать слова почти невозможно; если не укладываемся даже на этом потолке — просто ускоряем до потолка и оставляем небольшое наложение, а не кашу из слов
     var DUCK_FACTOR = 0.15;        // во сколько раз приглушать оригинал ОТНОСИТЕЛЬНО текущей громкости пользователя
     var DUCK_IN_RAMP_MS = 120;     // приглушение перед репликой — резче
     var DUCK_OUT_RAMP_MS = 300;    // восстановление после реплики — чуть плавнее
@@ -261,9 +262,11 @@
                     console.log(LOG_PREFIX, 'реплика', i, 'готова, ' + synthMs.toFixed(0) + 'мс, без коррекции скорости');
                     return;
                 }
-                // не уложились даже с запасом на наложение — досинтезируем с ускорением
-                var speed = synthMs / allowedMs;
-                console.log(LOG_PREFIX, 'реплика', i, 'не укладывается (' + synthMs.toFixed(0) + 'мс из ' + allowedMs.toFixed(0) + 'мс), ускоряю в', speed.toFixed(2), 'раза');
+                // не уложились даже с запасом на наложение — досинтезируем с ускорением,
+                // но не быстрее MAX_SPEED — после этого разобрать речь почти нереально,
+                // лучше оставить небольшое наложение на следующую реплику
+                var speed = Math.min(MAX_SPEED, synthMs / allowedMs);
+                console.log(LOG_PREFIX, 'реплика', i, 'не укладывается (' + synthMs.toFixed(0) + 'мс из ' + allowedMs.toFixed(0) + 'мс), ускоряю в', speed.toFixed(2), 'раза' + (speed >= MAX_SPEED ? ' (потолок, останется небольшое наложение)' : ''));
                 return synthOne(cue.text, speed).then(function (buf2) {
                     return self.ctx.decodeAudioData(buf2.slice(0));
                 }).then(function (audioBuf2) {
