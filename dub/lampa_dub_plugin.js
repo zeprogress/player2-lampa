@@ -53,11 +53,15 @@
     function rampVolume(video, targetVol, durationMs) {
         if (!video) return;
         if (volumeRampFrame) cancelAnimationFrame(volumeRampFrame);
-        var startVol = video.volume;
+        // video.volume у этой сборки Lampa иногда оказывается чуть больше 1
+        // (видели IndexSizeError на промежуточных точках интерполяции) —
+        // HTMLMediaElement.volume жёстко требует [0, 1], поэтому клэмпим
+        // и стартовое значение, и каждый кадр анимации.
+        var startVol = Math.max(0, Math.min(1, video.volume));
         var startTime = performance.now();
         function step(now) {
             var t = Math.min(1, (now - startTime) / durationMs);
-            video.volume = startVol + (targetVol - startVol) * t;
+            video.volume = Math.max(0, Math.min(1, startVol + (targetVol - startVol) * t));
             if (t < 1) volumeRampFrame = requestAnimationFrame(step);
             else volumeRampFrame = null;
         }
