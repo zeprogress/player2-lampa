@@ -7,9 +7,13 @@
  *    публичного API для чтения активной дорожки у Lampa нет;
  *  - озвучка идёт "по мере просмотра": реплики на ближайшие ~15с вперёд
  *    досинтезируются в фоне, а не всё сразу при старте;
- *  - к Fish Audio ходим через обычный POST /v1/tts (не WebSocket) —
- *    браузерный WebSocket API не умеет ставить Authorization-заголовок
- *    при хендшейке, а fetch() умеет;
+ *  - к Fish Audio плагин НЕ ходит напрямую: у /v1/tts нет CORS для
+ *    браузерных запросов (проверено — preflight отвечает 401 без единого
+ *    Access-Control-* заголовка), а WebSocket-путь тоже недоступен из
+ *    браузера (нельзя выставить Authorization-заголовок на хендшейке).
+ *    Поэтому запросы идут через собственный Cloudflare Worker-прокси
+ *    (fish-tts-proxy), который хранит ключ как секрет и сам добавляет
+ *    Authorization + CORS-заголовки на ответ;
  *  - таймингам не подчиняемся жёстко: если реплика длиннее своего окна,
  *    ускоряем её ровно настолько, чтобы не залезть в начало СЛЕДУЮЩЕЙ
  *    реплики больше чем на OVERLAP_TOLERANCE_MS — лёгкое наложение
@@ -17,11 +21,6 @@
  *  - воспроизведение — Web Audio API (AudioBufferSourceNode), не
  *    <audio>-теги: так можно точно спланировать старт каждой реплики
  *    и не бороться с play()/pause() гонками.
- *
- * Плагин публикуется на GitHub Pages (публичный репозиторий), поэтому
- * ключ Fish Audio в код НЕ зашивается — вводится текстовым полем в
- * настройках и хранится локально в Lampa.Storage (только в браузере
- * пользователя, в коде/репозитории ключа нет).
  *
  * ВАЖНО про type:'input' в Lampa.SettingsApi.addParam: обязательно нужно
  * поле param.values (пустая строка '' для свободного текстового ввода,
@@ -36,12 +35,7 @@
 
     var LOG_PREFIX = '[ai-dub]';
 
-    function getApiKey() {
-        return (Lampa.Storage.field('ai_dub_fish_key') || '').trim();
-    }
-
-    var FISH_MODEL = 's2.1-pro-free';
-    var FISH_TTS_URL = 'https://api.fish.audio/v1/tts';
+    var TTS_PROXY_URL = 'https://fish-tts-proxy.player2vr.workers.dev/';
     var REFERENCE_ID = 'c4ec5839e2044150aad40ac193a602f1'; // "Володарский"
 
     var LOOKAHEAD_MS = 15000;      // на сколько вперёд по времени видео досинтезируем
@@ -49,7 +43,7 @@
     var DUCK_VOLUME = 0.15;        // громкость оригинала при активной озвучке
 
     // ---------------------------------------------------------------
-    // Настройка: тумблер + поле ввода ключа в Настройках плеера
+    // Настройка: тумблер "AI-озвучка" в Настройках плеера
     // ---------------------------------------------------------------
     if (Lampa.SettingsApi) {
         Lampa.SettingsApi.addParam({
@@ -57,15 +51,6 @@
             param: { name: 'ai_dub_enabled', type: 'trigger', default: false },
             field: { name: 'AI-озвучка (Fish Audio)', description: 'Экспериментальный синхронный ИИ-дубляж поверх оригинальной дорожки' },
             onChange: function () { console.log(LOG_PREFIX, 'toggle ->', Lampa.Storage.field('ai_dub_enabled')); }
-        });
-        Lampa.SettingsApi.addParam({
-            component: 'player',
-            param: { name: 'ai_dub_fish_key', type: 'input', values: '', default: '' },
-            field: { name: 'Fish Audio API-ключ', description: 'fish.audio/app/developers' },
-            onChange: function (value) {
-                Lampa.Storage.set('ai_dub_fish_key', value);
-                console.log(LOG_PREFIX, 'ключ обновлён, длина:', (value || '').length);
-            }
         });
     } else {
         console.warn(LOG_PREFIX, 'Lampa.SettingsApi недоступен — плагин загружен слишком рано или это не та версия Lampa');
@@ -161,8 +146,6 @@
     // Fish Audio TTS: одна реплика за один POST-запрос
     // ---------------------------------------------------------------
     function synthOne(text, speed) {
-        var apiKey = getApiKey();
-        if (!apiKey) return Promise.reject(new Error('нет API-ключа Fish Audio'));
         var body = {
             text: text,
             format: 'mp3',
@@ -173,16 +156,12 @@
         if (speed && speed !== 1) {
             body.prosody = { speed: Math.max(0.5, Math.min(2.0, speed)) };
         }
-        return fetch(FISH_TTS_URL, {
+        return fetch(TTS_PROXY_URL, {
             method: 'POST',
-            headers: {
-                'Authorization': 'Bearer ' + apiKey,
-                'model': FISH_MODEL,
-                'Content-Type': 'application/json'
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body)
         }).then(function (resp) {
-            if (!resp.ok) throw new Error('Fish TTS HTTP ' + resp.status);
+            if (!resp.ok) throw new Error('TTS proxy HTTP ' + resp.status);
             return resp.arrayBuffer();
         });
     }
@@ -402,7 +381,6 @@
     Lampa.Player.listener.follow('start', function (data) {
         console.log(LOG_PREFIX, 'player start, enabled =', dubEnabled(), 'data =', data);
         if (!dubEnabled()) { console.log(LOG_PREFIX, 'выключено в настройках — выходим'); return; }
-        if (!getApiKey()) { console.warn(LOG_PREFIX, 'не задан API-ключ в настройках плеера'); return; }
 
         var subs = (data && data.subtitles) || [];
         if (!subs.length) {
