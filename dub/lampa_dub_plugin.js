@@ -36,7 +36,25 @@
     var LOG_PREFIX = '[ai-dub]';
 
     var TTS_PROXY_URL = 'https://fish-tts-proxy.player2vr.workers.dev/';
-    var REFERENCE_ID = 'c4ec5839e2044150aad40ac193a602f1'; // "Володарский"
+
+    var VOICES = {
+        'c4ec5839e2044150aad40ac193a602f1': 'Володарский',
+        '567d30e800cc4dd6a331411c7f970a47': 'Паша Техник',
+        '4d72cce58e0b479e8aa135d8c1829edd': 'Патрик звезда',
+        '5b99cb3218ee4f1a8090fbbca8c95241': 'Морти',
+        'bc8eb8dcdc184763b0a769ee03275724': 'Жириновский',
+        '205c5c4aadde43d2809636ad19773e6c': 'Стетхам',
+        '493790cdb9c841f299e883478fb1b6a5': 'СССР',
+        'e43f5f43e2df470a855dad3e0f2f369b': 'Морфеус',
+        '558fa6f5859d4c55adbc830c076ba445': 'Тянка',
+        '54076f8bfbc54979ad33764278e5e635': 'Микки Маус'
+    };
+    var DEFAULT_REFERENCE_ID = 'c4ec5839e2044150aad40ac193a602f1'; // "Володарский"
+
+    function getReferenceId() {
+        var id = Lampa.Storage.field('ai_dub_voice');
+        return (id && VOICES[id]) ? id : DEFAULT_REFERENCE_ID;
+    }
 
     var LOOKAHEAD_MS = 15000;      // на сколько вперёд по времени видео досинтезируем
     var OVERLAP_TOLERANCE_MS = 300; // сколько наложения на следующую реплику терпим
@@ -90,6 +108,27 @@
             param: { name: 'ai_dub_enabled', type: 'trigger', default: false },
             field: { name: 'AI-озвучка (Fish Audio)', description: 'Экспериментальный синхронный ИИ-дубляж поверх оригинальной дорожки' },
             onChange: function () { console.log(LOG_PREFIX, 'toggle ->', Lampa.Storage.field('ai_dub_enabled')); }
+        });
+        Lampa.SettingsApi.addParam({
+            component: 'player',
+            param: { name: 'ai_dub_voice', type: 'select', values: VOICES, default: DEFAULT_REFERENCE_ID },
+            field: { name: 'Голос озвучки', description: 'Fish Audio voice' },
+            onChange: function (value) {
+                Lampa.Storage.set('ai_dub_voice', value);
+                console.log(LOG_PREFIX, 'голос изменён на:', VOICES[value] || value);
+                // ещё не прозвучавшие реплики пересинтезируем новым голосом —
+                // иначе до конца текущего сеанса звучал бы вперемешку старый
+                // (уже засинтезированный и закэшированный) и новый голос
+                if (current && current.controller) {
+                    var c = current.controller;
+                    for (var i = 0; i < c.state.length; i++) {
+                        if (c.state[i] === 'ready' || c.state[i] === 'loading') {
+                            c.state[i] = 'pending';
+                            c.buffers[i] = undefined;
+                        }
+                    }
+                }
+            }
         });
     } else {
         console.warn(LOG_PREFIX, 'Lampa.SettingsApi недоступен — плагин загружен слишком рано или это не та версия Lampa');
@@ -190,7 +229,7 @@
             format: 'mp3',
             chunk_length: 300,
             latency: 'normal',
-            reference_id: REFERENCE_ID
+            reference_id: getReferenceId()
         };
         if (speed && speed !== 1) {
             body.prosody = { speed: Math.max(0.5, Math.min(2.0, speed)) };
