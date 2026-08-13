@@ -187,6 +187,8 @@
         this.lastPaused = video.paused;
         this.lastKnownMs = video.currentTime * 1000;
         if (video.paused) this.ctx.suspend();
+        this.activeWindows = []; // [{start_ms, end_ms}] — когда реально звучит синтезированная реплика
+        this.ducked = false;
     }
 
     DubController.prototype.budgetMs = function (i) {
@@ -245,7 +247,19 @@
             var startAt = self.ctx.currentTime + Math.max(0, delaySec);
             src.start(startAt);
             self.sources.push(src);
+            // окно, в которое реально звучит эта реплика — по нему приглушаем
+            // оригинал, а не постоянно на всё время работы озвучки
+            self.activeWindows.push({ start_ms: cue.start_ms, end_ms: cue.start_ms + self.buffers[i].duration * 1000 });
         });
+    };
+
+    DubController.prototype.updateDucking = function (nowVideoMs) {
+        // чистим окна, которые уже прозвучали
+        this.activeWindows = this.activeWindows.filter(function (w) { return w.end_ms >= nowVideoMs - 200; });
+        var shouldDuck = this.activeWindows.some(function (w) { return nowVideoMs >= w.start_ms && nowVideoMs <= w.end_ms; });
+        if (shouldDuck === this.ducked) return;
+        this.ducked = shouldDuck;
+        try { Lampa.PlayerVideo.volume(shouldDuck ? DUCK_VOLUME : 1); } catch (e) {}
     };
 
     DubController.prototype.cancelScheduled = function () {
@@ -294,6 +308,7 @@
             console.log(LOG_PREFIX, 'tick, видео на', (nowVideoMs / 1000).toFixed(1) + 'с, реплик в окне поиска:', inWindow);
         }
         this.scheduleReady();
+        this.updateDucking(nowVideoMs);
     };
 
     DubController.prototype.destroy = function () {
@@ -371,7 +386,9 @@
             var controller = new DubController(liveVideo, cues);
             var timer = setInterval(function () { controller.tick(); }, 1000);
             current = { controller: controller, timer: timer };
-            try { Lampa.PlayerVideo.volume(DUCK_VOLUME); } catch (e) {}
+            // громкость приглушается/восстанавливается динамически из
+            // DubController.updateDucking() только на время реального
+            // звучания реплики, не на всё время работы озвучки
             controller.tick();
         }).catch(function (err) {
             clearInterval(heartbeat);
