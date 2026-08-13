@@ -41,8 +41,28 @@
     var LOOKAHEAD_MS = 15000;      // на сколько вперёд по времени видео досинтезируем
     var OVERLAP_TOLERANCE_MS = 300; // сколько наложения на следующую реплику терпим
     var DUCK_VOLUME = 0.15;        // громкость оригинала при активной озвучке
+    var DUCK_RAMP_MS = 250;        // за сколько плавно менять громкость при приглушении/восстановлении
     var SUB_FETCH_TIMEOUT_MS = 120000; // сколько ждать субтитры от TorrServer на холодном торренте
     var SEEK_SETTLE_MS = 1500;     // сколько ждать после перемотки, пока currentTime не перестанет скакать
+
+    // Плавно меняет громкость САМОГО <video> (не через Lampa.PlayerVideo.volume() —
+    // та ещё и сохраняет значение как пользовательскую настройку громкости в
+    // Storage, а наше приглушение на время реплики — временное и не должно
+    // перезаписывать реальную громкость, которую выставил себе пользователь).
+    var volumeRampFrame = null;
+    function rampVolume(video, targetVol, durationMs) {
+        if (!video) return;
+        if (volumeRampFrame) cancelAnimationFrame(volumeRampFrame);
+        var startVol = video.volume;
+        var startTime = performance.now();
+        function step(now) {
+            var t = Math.min(1, (now - startTime) / durationMs);
+            video.volume = startVol + (targetVol - startVol) * t;
+            if (t < 1) volumeRampFrame = requestAnimationFrame(step);
+            else volumeRampFrame = null;
+        }
+        volumeRampFrame = requestAnimationFrame(step);
+    }
 
     // ---------------------------------------------------------------
     // Настройка: тумблер "AI-озвучка" в Настройках плеера
@@ -261,7 +281,7 @@
         var shouldDuck = this.activeWindows.some(function (w) { return nowVideoMs >= w.start_ms && nowVideoMs <= w.end_ms; });
         if (shouldDuck === this.ducked) return;
         this.ducked = shouldDuck;
-        try { Lampa.PlayerVideo.volume(shouldDuck ? DUCK_VOLUME : 1); } catch (e) {}
+        rampVolume(this.video, shouldDuck ? DUCK_VOLUME : 1, DUCK_RAMP_MS);
     };
 
     DubController.prototype.cancelScheduled = function () {
@@ -273,7 +293,7 @@
         this.activeWindows = [];
         if (this.ducked) {
             this.ducked = false;
-            try { Lampa.PlayerVideo.volume(1); } catch (e) {}
+            rampVolume(this.video, 1, DUCK_RAMP_MS);
         }
     };
 
