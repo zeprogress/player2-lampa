@@ -297,8 +297,13 @@
         var video = Lampa.PlayerVideo.video();
         if (!video || !subtitleUrl) return;
 
-        fetch(subtitleUrl).then(function (r) { return r.text(); }).then(function (text) {
+        fetch(subtitleUrl).then(function (r) {
+            console.log(LOG_PREFIX, 'ответ на запрос субтитров:', r.status, r.ok, r.headers.get('content-type'), r.headers.get('content-length'));
+            return r.text();
+        }).then(function (text) {
+            console.log(LOG_PREFIX, 'текст субтитров, длина:', text.length, 'превью:', JSON.stringify(text.slice(0, 200)));
             var cues = parseSubtitles(subtitleUrl, text);
+            console.log(LOG_PREFIX, 'распознано реплик:', cues.length);
             if (!cues.length) {
                 console.warn('[ai-dub] субтитры пустые или не распознаны:', subtitleUrl);
                 return;
