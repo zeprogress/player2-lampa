@@ -111,10 +111,18 @@
         var cues = [];
         var lines = text.replace(/\r/g, '').split('\n');
         var format = null;
+        var section = '';
         var re = /(\d+):(\d{2}):(\d{2})\.(\d{2})/;
         lines.forEach(function (line) {
-            if (/^Format:/i.test(line) && format === null) {
+            var sectionMatch = /^\[([^\]]+)\]/.exec(line);
+            if (sectionMatch) { section = sectionMatch[1].toLowerCase(); return; }
+            // у .ass своя секция [V4+ Styles] тоже начинается с "Format:",
+            // но с другим набором полей (22 шт. вместо 10 у [Events]) —
+            // нужен именно формат из [Events], иначе индекс текста поедет
+            // и все реплики будут молча отбрасываться как "неправильные"
+            if (section === 'events' && /^Format:/i.test(line)) {
                 format = line.replace(/^Format:\s*/i, '').split(',').map(function (s) { return s.trim(); });
+                return;
             }
             if (!/^Dialogue:/i.test(line)) return;
             var rest = line.replace(/^Dialogue:\s*/i, '');
