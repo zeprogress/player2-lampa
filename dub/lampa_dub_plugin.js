@@ -630,14 +630,23 @@
         }
     }
 
+    // Плеер сейчас реально открыт? Сторож ниже не должен ничего делать,
+    // если видео уже закрыто — Lampa.PlayerVideo.video() может продолжать
+    // отдавать старый/отсоединённый <video>-узел даже после закрытия
+    // плеера, и без этого флага сторож принимал это за "видео сменилось"
+    // и пытался снова запустить озвучку на уже закрытом плеере.
+    var playerActive = false;
+
     Lampa.Player.listener.follow('start', function (data) {
         console.log(LOG_PREFIX, 'player start, enabled =', dubEnabled(), 'data =', data);
+        playerActive = true;
         if (!dubEnabled()) { console.log(LOG_PREFIX, 'выключено в настройках — выходим'); return; }
         var videoUrl = (data && data.url) || (Lampa.PlayerVideo.video() && Lampa.PlayerVideo.video().currentSrc) || '';
         handleVideoSource(videoUrl, data && data.subtitles);
     });
 
     Lampa.Player.listener.follow('destroy', function () {
+        playerActive = false;
         stopCurrent();
         lastHandledVideoUrl = '';
     });
@@ -649,7 +658,7 @@
     // src живого видео независимо от событий плеера и сравниваем с тем,
     // под что сейчас реально настроена озвучка.
     setInterval(function () {
-        if (!dubEnabled()) return;
+        if (!playerActive || !dubEnabled()) return;
         var video = Lampa.PlayerVideo.video();
         var src = video && (video.currentSrc || video.src);
         if (!src || src === lastHandledVideoUrl) return;
