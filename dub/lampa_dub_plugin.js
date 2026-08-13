@@ -19,15 +19,16 @@
  *    и не бороться с play()/pause() гонками.
  *
  * Плагин публикуется на GitHub Pages (публичный репозиторий), поэтому
- * ключ Fish Audio в код НЕ зашивается — хранится локально в
- * Lampa.Storage (только в браузере пользователя, в коде/репозитории
- * ключа нет).
+ * ключ Fish Audio в код НЕ зашивается — вводится текстовым полем в
+ * настройках и хранится локально в Lampa.Storage (только в браузере
+ * пользователя, в коде/репозитории ключа нет).
  *
- * ВРЕМЕННО (см. чат): пробовали добавить текстовое поле для ключа через
- * Lampa.SettingsApi.addParam({..., type:'input', ...}) — это уронило
- * весь экран настроек Lampa (TypeError в app.min.js/update$3), формат
- * параметра, видимо, не тот для этой версии Lampa. Пока не разобрались
- * с правильным форматом — временно вернули prompt() при первом запуске.
+ * ВАЖНО про type:'input' в Lampa.SettingsApi.addParam: обязательно нужно
+ * поле param.values (пустая строка '' для свободного текстового ввода,
+ * не select) — без него Lampa падает при рендере строки настроек
+ * (TypeError: Cannot read properties of undefined), это подтверждённая
+ * особенность её внутреннего Params.select(), общая и для select и для
+ * input типов.
  */
 (function () {
     'use strict';
@@ -36,12 +37,7 @@
     var LOG_PREFIX = '[ai-dub]';
 
     function getApiKey() {
-        var key = (Lampa.Storage.get('ai_dub_fish_key', '') || '').trim();
-        if (!key) {
-            key = (prompt('Введите API-ключ Fish Audio (fish.audio/app/developers):') || '').trim();
-            if (key) Lampa.Storage.set('ai_dub_fish_key', key);
-        }
-        return key;
+        return (Lampa.Storage.field('ai_dub_fish_key') || '').trim();
     }
 
     var FISH_MODEL = 's2.1-pro-free';
@@ -53,7 +49,7 @@
     var DUCK_VOLUME = 0.15;        // громкость оригинала при активной озвучке
 
     // ---------------------------------------------------------------
-    // Настройка: тумблер "AI-озвучка" в Настройках плеера
+    // Настройка: тумблер + поле ввода ключа в Настройках плеера
     // ---------------------------------------------------------------
     if (Lampa.SettingsApi) {
         Lampa.SettingsApi.addParam({
@@ -61,6 +57,15 @@
             param: { name: 'ai_dub_enabled', type: 'trigger', default: false },
             field: { name: 'AI-озвучка (Fish Audio)', description: 'Экспериментальный синхронный ИИ-дубляж поверх оригинальной дорожки' },
             onChange: function () { console.log(LOG_PREFIX, 'toggle ->', Lampa.Storage.field('ai_dub_enabled')); }
+        });
+        Lampa.SettingsApi.addParam({
+            component: 'player',
+            param: { name: 'ai_dub_fish_key', type: 'input', values: '', default: '' },
+            field: { name: 'Fish Audio API-ключ', description: 'fish.audio/app/developers' },
+            onChange: function (value) {
+                Lampa.Storage.set('ai_dub_fish_key', value);
+                console.log(LOG_PREFIX, 'ключ обновлён, длина:', (value || '').length);
+            }
         });
     } else {
         console.warn(LOG_PREFIX, 'Lampa.SettingsApi недоступен — плагин загружен слишком рано или это не та версия Lampa');
