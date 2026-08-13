@@ -540,9 +540,25 @@
             var files = (torrent && torrent.file_stats) || [];
             var videoPath = decodeURIComponent(videoUrl.split('/stream/')[1].split('?')[0]);
             var videoDir = videoPath.substring(0, videoPath.lastIndexOf('/'));
-            var candidate = files.find(function (f) {
-                return SUB_EXT_RE.test(f.path) && f.path.substring(0, f.path.lastIndexOf('/')) === videoDir;
-            }) || files.find(function (f) { return SUB_EXT_RE.test(f.path); }); // не нашли рядом — берём любой сабовый файл в раздаче
+            var videoStem = videoPath.split('/').pop().replace(/\.[^.]+$/, '');
+            var subFiles = files.filter(function (f) { return SUB_EXT_RE.test(f.path); });
+
+            // Раздача может быть батчем на весь сезон под одним хэшем (как
+            // здесь: "Здоров!" на 1-й серии озвучивало и 2-ю) — берём ТОЛЬКО
+            // файл, чьё имя без расширения совпадает с именем видео. Если
+            // точного совпадения нет — лучше промолчать, чем найти "любой
+            // сабовый файл в раздаче" и озвучить не ту серию, как раньше.
+            var candidate = subFiles.find(function (f) {
+                var stem = f.path.split('/').pop().replace(/\.[^.]+$/, '');
+                return stem === videoStem;
+            });
+            if (!candidate) {
+                // запасной вариант — тот же каталог, что и видео (для раздач
+                // без строгого совпадения имён файлов серии/сабов)
+                candidate = subFiles.find(function (f) {
+                    return f.path.substring(0, f.path.lastIndexOf('/')) === videoDir;
+                });
+            }
             if (!candidate) return null;
             var basename = candidate.path.split('/').pop();
             return origin + '/stream/' + encodeURIComponent(basename) + '?link=' + hash + '&index=' + candidate.id + '&play';
